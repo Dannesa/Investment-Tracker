@@ -63,255 +63,290 @@ def init_db():
     conn.commit()
     conn.close()
 
-def is_seeded():
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM buy_list")
-    n = c.fetchone()[0]
-    conn.close()
-    return n > 0
-
 def seed_v54_clean():
+    """
+    CLEAN SEED — V1 SOURCE OF TRUTH
+    Drops all tables and rebuilds from scratch.
+    No INSERT OR IGNORE — full wipe and reseed every time this runs.
+    """
     conn = get_conn()
     c = conn.cursor()
+
+    # DROP all tables — full wipe
+    c.execute("DROP TABLE IF EXISTS buy_list")
+    c.execute("DROP TABLE IF EXISTS hold_list")
+    c.execute("DROP TABLE IF EXISTS master_log")
+    c.execute("DROP TABLE IF EXISTS price_history")
+
+    # Recreate tables
+    c.execute("""CREATE TABLE buy_list (
+        ticker TEXT PRIMARY KEY, current_price REAL, upside_low REAL, upside_high REAL,
+        capital_efficiency_score REAL, institutional_money TEXT DEFAULT 'Pending',
+        date_added TEXT, is_new INTEGER DEFAULT 0, notes TEXT DEFAULT '')""")
+    c.execute("""CREATE TABLE hold_list (
+        ticker TEXT PRIMARY KEY, current_price REAL, upside_low REAL, upside_high REAL,
+        fair_entry_low REAL, fair_entry_high REAL, capital_efficiency_score REAL,
+        date_added TEXT, is_new INTEGER DEFAULT 0, notes TEXT DEFAULT '')""")
+    c.execute("""CREATE TABLE master_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL,
+        date_analyzed TEXT, verdict TEXT, notes TEXT DEFAULT '',
+        next_review TEXT DEFAULT 'Trigger-phrase governed')""")
+    c.execute("""CREATE TABLE price_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, price REAL, fetched_at TEXT)""")
+
+    # ── BUY LIST — from V1 ──
+    # Score = Upside% (mid) / Current Price
     buy_data = [
-        ("GTLB", 25.98, 40, 60, "Pending", "May 11, 2026", 0),
-        ("NKE",  44.14, 50, 70, "Pending", "May 11, 2026", 1),
+        ("GTLB", 25.98,  40, 60, "Pending", "May 11, 2026", 0),
+        ("NKE",  44.14,  50, 70, "Pending", "May 11, 2026", 1),
         ("CRM",  181.82, 45, 60, "Pending", "May 11, 2026", 0),
         ("ADBE", 247.36, 50, 70, "Pending", "May 11, 2026", 0),
     ]
     for ticker, price, ul, uh, inst, dt, is_new in buy_data:
         score = round((ul + uh) / 2 / price, 2)
-        c.execute("""INSERT OR IGNORE INTO buy_list
+        c.execute("""INSERT INTO buy_list
             (ticker, current_price, upside_low, upside_high, capital_efficiency_score,
              institutional_money, date_added, is_new) VALUES (?,?,?,?,?,?,?,?)""",
             (ticker, price, ul, uh, score, inst, dt, is_new))
+
+    # ── HOLD LIST — from V1 ──
+    # Score = Upside% (mid) / Fair Entry Price (mid)
     hold_data = [
-        ("GFI",   44.86, 35, 45, 28,  33,  "May 11, 2026", 0),
-        ("HALO",  66.41, 45, 55, 52,  58,  "May 11, 2026", 0),
-        ("TW",   108.81, 45, 55, 83,  92,  "May 11, 2026", 0),
-        ("NOW",   92.50, 35, 50, 72,  80,  "May 11, 2026", 0),
-        ("NEM",  120.67, 50, 55, 93,  100, "May 11, 2026", 0),
-        ("NDAQ",  88.48, 50, 55, 78,  83,  "May 12, 2026", 0),
-        ("SNOW", 154.06, 30, 45, 105, 115, "May 11, 2026", 0),
-        ("AMZN", 271.82, 25, 40, 195, 210, "May 11, 2026", 0),
-        ("INTU", 397.54, 30, 45, 320, 340, "May 11, 2026", 0),
-        ("EQIX",1073.23, 30, 45, 700, 780, "May 12, 2026", 0),
-        ("AME",  231.61, 35, 50, 155, 175, "May 12, 2026", 0),
-        ("CRWD", 548.02, 35, 50, 310, 360, "May 12, 2026", 1),
+        ("GFI",   44.86,   35, 45, 28,  33,  "May 11, 2026", 0),
+        ("HALO",  66.41,   45, 55, 52,  58,  "May 11, 2026", 0),
+        ("TW",    108.81,  45, 55, 83,  92,  "May 11, 2026", 0),
+        ("NOW",   92.50,   35, 50, 72,  80,  "May 11, 2026", 0),
+        ("NEM",   120.67,  50, 55, 93,  100, "May 11, 2026", 0),
+        ("NDAQ",  88.48,   50, 55, 78,  83,  "May 12, 2026", 0),
+        ("SNOW",  154.06,  30, 45, 105, 115, "May 11, 2026", 0),
+        ("AMZN",  271.82,  25, 40, 195, 210, "May 11, 2026", 0),
+        ("INTU",  397.54,  30, 45, 320, 340, "May 11, 2026", 0),
+        ("EQIX",  1073.23, 30, 45, 700, 780, "May 12, 2026", 0),
+        ("AME",   231.61,  35, 50, 155, 175, "May 12, 2026", 0),
+        ("CRWD",  548.02,  35, 50, 310, 360, "May 12, 2026", 1),
     ]
     for ticker, price, ul, uh, fel, feh, dt, is_new in hold_data:
         fep_mid = (fel + feh) / 2
         score = round((ul + uh) / 2 / fep_mid, 2)
-        c.execute("""INSERT OR IGNORE INTO hold_list
+        c.execute("""INSERT INTO hold_list
             (ticker, current_price, upside_low, upside_high, fair_entry_low, fair_entry_high,
              capital_efficiency_score, date_added, is_new) VALUES (?,?,?,?,?,?,?,?,?)""",
             (ticker, price, ul, uh, fel, feh, score, dt, is_new))
 
-    # ── MASTER LOG — BUY (pre-Unified, no square mark) ──
+    # ── MASTER LOG — BUY — from V1 ──
     buy_log = [
-        ("GTLB", "May 4, 2026", "✅ BUY"),
-        ("ADBE", "May 4, 2026", "✅ BUY"),
-        ("NKE",  "May 4, 2026", "✅ BUY"),
-        ("CRM",  "May 4, 2026", "✅ BUY"),
+        ("GTLB", "May 4, 2026"),
+        ("ADBE", "May 4, 2026"),
+        ("NKE",  "May 4, 2026"),
+        ("CRM",  "May 4, 2026"),
     ]
-    for ticker, dt, verdict in buy_log:
-        c.execute("INSERT OR IGNORE INTO master_log (ticker,date_analyzed,verdict) VALUES (?,?,?)", (ticker, dt, verdict))
+    for ticker, dt in buy_log:
+        c.execute("INSERT INTO master_log (ticker, date_analyzed, verdict) VALUES (?,?,'BUY')", (ticker, dt))
 
-    # ── MASTER LOG — HOLD ──
+    # ── MASTER LOG — HOLD — from V1 ──
     hold_log = [
-        ("AMZN", "May 4, 2026",  "⚠️ HOLD"),
-        ("INTU", "May 4, 2026",  "⚠️ HOLD"),
-        ("NOW",  "May 4, 2026",  "⚠️ HOLD"),
-        ("SNOW", "May 4, 2026",  "⚠️ HOLD"),
-        ("HALO", "May 5, 2026",  "⚠️🟨 HOLD"),
-        ("GFI",  "May 5, 2026",  "⚠️🟨 HOLD"),
-        ("TW",   "May 5, 2026",  "⚠️🟨 HOLD"),
-        ("NEM",  "May 11, 2026", "⚠️🟨 HOLD"),
-        ("NDAQ", "May 12, 2026", "⚠️🟨 HOLD"),
-        ("EQIX", "May 12, 2026", "⚠️🟨 HOLD"),
-        ("AME",  "May 12, 2026", "⚠️🟨 HOLD"),
-        ("CRWD", "May 12, 2026", "⚠️🟨 HOLD"),
+        ("AMZN", "May 4, 2026"),
+        ("INTU", "May 4, 2026"),
+        ("NOW",  "May 4, 2026"),
+        ("SNOW", "May 4, 2026"),
+        ("HALO", "May 5, 2026"),
+        ("GFI",  "May 5, 2026"),
+        ("TW",   "May 5, 2026"),
+        ("NEM",  "May 11, 2026"),
+        ("NDAQ", "May 12, 2026"),
+        ("EQIX", "May 12, 2026"),
+        ("AME",  "May 12, 2026"),
+        ("CRWD", "May 12, 2026"),
     ]
-    for ticker, dt, verdict in hold_log:
-        c.execute("INSERT OR IGNORE INTO master_log (ticker,date_analyzed,verdict) VALUES (?,?,?)", (ticker, dt, verdict))
+    for ticker, dt in hold_log:
+        c.execute("INSERT INTO master_log (ticker, date_analyzed, verdict) VALUES (?,?,'HOLD')", (ticker, dt))
 
-    # ── MASTER LOG — HARD PASS ──
+    # ── MASTER LOG — HARD PASS — from V1 ──
     hard_pass_log = [
-        ("CNXC",  "May 4, 2026",  "🚫 HARD PASS"),
-        ("G",     "May 4, 2026",  "🚫 HARD PASS"),
-        ("EPAM",  "May 4, 2026",  "🚫 HARD PASS"),
-        ("SAIC",  "May 4, 2026",  "🚫 HARD PASS"),
-        ("CTSH",  "May 4, 2026",  "🚫 HARD PASS"),
-        ("GIB",   "May 4, 2026",  "🚫 HARD PASS"),
-        ("DOX",   "May 4, 2026",  "🚫 HARD PASS"),
-        ("CRUS",  "May 11, 2026", "🚫🟥 HARD PASS"),
-        ("CTRA",  "May 11, 2026", "🚫🟥 HARD PASS"),
-        ("BRKB",  "May 11, 2026", "🚫🟥 HARD PASS"),
-        ("PK",    "May 11, 2026", "🚫🟥 HARD PASS"),
-        ("VNO",   "May 11, 2026", "🚫🟥 HARD PASS"),
-        ("ROCK",  "May 11, 2026", "🚫🟥 HARD PASS"),
-        ("PDD",   "May 11, 2026", "🚫🟥 HARD PASS"),
-        ("GNL",   "May 11, 2026", "🚫🟥 HARD PASS"),
-        ("PEB",   "May 11, 2026", "🚫🟥 HARD PASS"),
-        ("EQNR",  "May 11, 2026", "🚫🟥 HARD PASS"),
-        ("CBT",   "May 11, 2026", "🚫🟥 HARD PASS"),
-        ("WHD",   "May 11, 2026", "🚫🟥 HARD PASS"),
-        ("HNNA",  "May 11, 2026", "🚫🟥 HARD PASS"),
-        ("XOM",   "May 12, 2026", "🚫🟥 HARD PASS"),
-        ("INTC",  "May 12, 2026", "🚫🟥 HARD PASS"),
-        ("SRI",   "May 12, 2026", "🚫🟥 HARD PASS"),
-        ("VNOM",  "May 12, 2026", "🚫🟥 HARD PASS"),
-        ("MBLY",  "May 12, 2026", "🚫🟥 HARD PASS"),
-        ("LYFT",  "May 12, 2026", "🚫🟥 HARD PASS"),
-        ("FANUY", "May 12, 2026", "🚫🟥 HARD PASS"),
-        ("ODFL",  "May 12, 2026", "🚫🟥 HARD PASS"),
-        ("MLM",   "May 12, 2026", "🚫🟥 HARD PASS"),
-        ("POOL",  "May 12, 2026", "🚫🟥 HARD PASS"),
-        ("TTC",   "May 12, 2026", "🚫🟥 HARD PASS"),
-        ("CSU",   "May 12, 2026", "🚫🟥 HARD PASS"),
-        ("NVR",   "May 12, 2026", "🚫🟥 HARD PASS"),
-        ("EXPD",  "May 12, 2026", "🚫🟥 HARD PASS"),
+        ("CNXC",  "May 4, 2026"),
+        ("G",     "May 4, 2026"),
+        ("EPAM",  "May 4, 2026"),
+        ("SAIC",  "May 4, 2026"),
+        ("CTSH",  "May 4, 2026"),
+        ("GIB",   "May 4, 2026"),
+        ("DOX",   "May 4, 2026"),
+        ("XOM",   "May 12, 2026"),
+        ("INTC",  "May 12, 2026"),
+        ("CRUS",  "May 11, 2026"),
+        ("CTRA",  "May 11, 2026"),
+        ("BRKB",  "May 11, 2026"),
+        ("PK",    "May 11, 2026"),
+        ("VNO",   "May 11, 2026"),
+        ("ROCK",  "May 11, 2026"),
+        ("PDD",   "May 11, 2026"),
+        ("GNL",   "May 11, 2026"),
+        ("PEB",   "May 11, 2026"),
+        ("EQNR",  "May 11, 2026"),
+        ("CBT",   "May 11, 2026"),
+        ("WHD",   "May 11, 2026"),
+        ("SRI",   "May 12, 2026"),
+        ("VNOM",  "May 12, 2026"),
+        ("MBLY",  "May 12, 2026"),
+        ("LYFT",  "May 12, 2026"),
+        ("FANUY", "May 12, 2026"),
+        ("HNNA",  "May 11, 2026"),
+        ("ODFL",  "May 12, 2026"),
+        ("MLM",   "May 12, 2026"),
+        ("POOL",  "May 12, 2026"),
+        ("TTC",   "May 12, 2026"),
+        ("CSU",   "May 12, 2026"),
+        ("NVR",   "May 12, 2026"),
+        ("EXPD",  "May 12, 2026"),
     ]
-    for ticker, dt, verdict in hard_pass_log:
-        c.execute("INSERT OR IGNORE INTO master_log (ticker,date_analyzed,verdict) VALUES (?,?,?)", (ticker, dt, verdict))
+    for ticker, dt in hard_pass_log:
+        c.execute("INSERT INTO master_log (ticker, date_analyzed, verdict) VALUES (?,?,'HARD_PASS')", (ticker, dt))
 
-    # ── MASTER LOG — PASS ──
+    # ── MASTER LOG — PASS — from V1 ──
     pass_log = [
-        ("CSWI",  "May 4, 2026",  "❌ PASS"),
-        ("TRU",   "May 4, 2026",  "❌ PASS"),
-        ("FIS",   "May 4, 2026",  "❌ PASS"),
-        ("MSFT",  "May 4, 2026",  "❌ PASS"),
-        ("CRWV",  "May 4, 2026",  "❌ PASS"),
-        ("PANW",  "May 4, 2026",  "❌ PASS"),
-        ("SOFI",  "May 4, 2026",  "❌ PASS"),
-        ("PLTR",  "May 4, 2026",  "❌ PASS"),
-        ("DDOG",  "May 4, 2026",  "❌ PASS"),
-        ("COST",  "May 4, 2026",  "❌ PASS"),
-        ("MCD",   "May 4, 2026",  "❌ PASS"),
-        ("HSY",   "May 4, 2026",  "❌ PASS"),
-        ("CL",    "May 4, 2026",  "❌ PASS"),
-        ("AXP",   "May 4, 2026",  "❌ PASS"),
-        ("PG",    "May 4, 2026",  "❌ PASS"),
-        ("JNJ",   "May 4, 2026",  "❌ PASS"),
-        ("PEP",   "May 4, 2026",  "❌ PASS"),
-        ("WM",    "May 4, 2026",  "❌ PASS"),
-        ("MNST",  "May 4, 2026",  "❌ PASS"),
-        ("AZO",   "May 4, 2026",  "❌ PASS"),
-        ("HD",    "May 4, 2026",  "❌ PASS"),
-        ("ROST",  "May 4, 2026",  "❌ PASS"),
-        ("LULU",  "May 4, 2026",  "❌ PASS"),
-        ("BKNG",  "May 4, 2026",  "❌ PASS"),
-        ("SBUX",  "May 4, 2026",  "❌ PASS"),
-        ("CMG",   "May 4, 2026",  "❌ PASS"),
-        ("CPRT",  "May 4, 2026",  "❌ PASS"),
-        ("FAST",  "May 4, 2026",  "❌ PASS"),
-        ("CTAS",  "May 4, 2026",  "❌ PASS"),
-        ("ITW",   "May 4, 2026",  "❌ PASS"),
-        ("ROK",   "May 4, 2026",  "❌ PASS"),
-        ("GEV",   "May 4, 2026",  "❌ PASS"),
-        ("KEYS",  "May 4, 2026",  "❌ PASS"),
-        ("VRT",   "May 4, 2026",  "❌ PASS"),
-        ("LMT",   "May 4, 2026",  "❌ PASS"),
-        ("HON",   "May 4, 2026",  "❌ PASS"),
-        ("TXN",   "May 4, 2026",  "❌ PASS"),
-        ("AMAT",  "May 4, 2026",  "❌ PASS"),
-        ("DIS",   "May 4, 2026",  "❌ PASS"),
-        ("VST",   "May 4, 2026",  "❌ PASS"),
-        ("DVN",   "May 4, 2026",  "❌ PASS"),
-        ("APA",   "May 4, 2026",  "❌ PASS"),
-        ("ET",    "May 4, 2026",  "❌ PASS"),
-        ("CEG",   "May 4, 2026",  "❌ PASS"),
-        ("NEE",   "May 4, 2026",  "❌ PASS"),
-        ("NVT",   "May 4, 2026",  "❌ PASS"),
-        ("ORA",   "May 4, 2026",  "❌ PASS"),
-        ("FSLR",  "May 4, 2026",  "❌ PASS"),
-        ("LNG",   "May 4, 2026",  "❌ PASS"),
-        ("CVX",   "May 4, 2026",  "❌ PASS"),
-        ("AM",    "May 14, 2026", "❌🟥 PASS"),
-        ("CHWY",  "May 14, 2026", "❌🟥 PASS"),
-        ("FLNG",  "May 4, 2026",  "❌ PASS"),
-        ("CRSP",  "May 4, 2026",  "❌ PASS"),
-        ("LZAGY", "May 4, 2026",  "❌ PASS"),
-        ("NTLA",  "May 4, 2026",  "❌ PASS"),
-        ("TWST",  "May 4, 2026",  "❌ PASS"),
-        ("SEV",   "May 4, 2026",  "❌ PASS"),
-        ("GRAIL", "May 4, 2026",  "❌ PASS"),
-        ("GH",    "May 4, 2026",  "❌ PASS"),
-        ("ASML",  "May 4, 2026",  "❌ PASS"),
-        ("KGC",   "May 4, 2026",  "❌ PASS"),
-        ("UBER",  "May 4, 2026",  "❌ PASS"),
-        ("CERT",  "May 4, 2026",  "❌ PASS"),
-        ("RKLB",  "May 4, 2026",  "❌ PASS"),
-        ("RGTI",  "May 4, 2026",  "❌ PASS"),
-        ("LLY",   "May 4, 2026",  "❌ PASS"),
-        ("TMO",   "May 4, 2026",  "❌ PASS"),
-        ("DHR",   "May 4, 2026",  "❌ PASS"),
-        ("ISRG",  "May 4, 2026",  "❌ PASS"),
-        ("SPGI",  "May 4, 2026",  "❌ PASS"),
-        ("MCO",   "May 4, 2026",  "❌ PASS"),
-        ("CSGP",  "May 4, 2026",  "❌ PASS"),
-        ("TRUE",  "May 5, 2026",  "❌🟥 PASS"),
-        ("EFX",   "May 5, 2026",  "❌🟥 PASS"),
-        ("IT",    "May 5, 2026",  "❌🟥 PASS"),
-        ("ROP",   "May 5, 2026",  "❌🟥 PASS"),
-        ("MSCI",  "May 5, 2026",  "❌🟥 PASS"),
-        ("BR",    "May 5, 2026",  "❌🟥 PASS"),
-        ("FDS",   "May 5, 2026",  "❌🟥 PASS"),
-        ("RSG",   "May 5, 2026",  "❌🟥 PASS"),
-        ("TYL",   "May 5, 2026",  "❌🟥 PASS"),
-        ("SSNC",  "May 5, 2026",  "❌🟥 PASS"),
-        ("LDOS",  "May 5, 2026",  "❌🟥 PASS"),
-        ("J",     "May 5, 2026",  "❌🟥 PASS"),
-        ("BAH",   "May 5, 2026",  "❌🟥 PASS"),
-        ("CACI",  "May 5, 2026",  "❌🟥 PASS"),
-        ("EXPO",  "May 5, 2026",  "❌🟥 PASS"),
-        ("FCN",   "May 5, 2026",  "❌🟥 PASS"),
-        ("MORN",  "May 5, 2026",  "❌🟥 PASS"),
-        ("JKHY",  "May 5, 2026",  "❌🟥 PASS"),
-        ("CDW",   "May 5, 2026",  "❌🟥 PASS"),
-        ("PAYX",  "May 5, 2026",  "❌🟥 PASS"),
-        ("LUNR",  "May 5, 2026",  "❌🟥 PASS"),
-        ("BBAI",  "May 5, 2026",  "❌🟥 PASS"),
-        ("OMAB",  "May 5, 2026",  "❌🟥 PASS"),
-        ("LOPE",  "May 5, 2026",  "❌🟥 PASS"),
-        ("IDCC",  "May 11, 2026", "❌🟥 PASS"),
-        ("FCFS",  "May 11, 2026", "❌🟥 PASS"),
-        ("BRO",   "May 11, 2026", "❌🟥 PASS"),
-        ("PRPO",  "May 11, 2026", "❌🟥 PASS"),
-        ("CCEL",  "May 11, 2026", "❌🟥 PASS"),
-        ("FRPT",  "May 11, 2026", "❌🟥 PASS"),
-        ("OPFI",  "May 11, 2026", "❌🟥 PASS"),
-        ("VEON",  "May 11, 2026", "❌🟥 PASS"),
-        ("ENS",   "May 11, 2026", "❌🟥 PASS"),
-        ("NUTX",  "May 11, 2026", "❌🟥 PASS"),
-        ("WRB",   "May 12, 2026", "❌🟥 PASS"),
-        ("ABBNY", "May 12, 2026", "❌🟥 PASS"),
-        ("MRVL",  "May 12, 2026", "❌🟥 PASS"),
-        ("OR",    "May 12, 2026", "❌🟥 PASS"),
-        ("ROKU",  "May 12, 2026", "❌🟥 PASS"),
-        ("CART",  "May 12, 2026", "❌🟥 PASS"),
-        ("ALVO",  "May 12, 2026", "❌🟥 PASS"),
-        ("TTWO",  "May 12, 2026", "❌🟥 PASS"),
-        ("MSI",   "May 12, 2026", "❌🟥 PASS"),
-        ("ZBRA",  "May 12, 2026", "❌🟥 PASS"),
-        ("AJG",   "May 12, 2026", "❌🟥 PASS"),
-        ("HEI",   "May 12, 2026", "❌🟥 PASS"),
-        ("IDXX",  "May 12, 2026", "❌🟥 PASS"),
-        ("WCN",   "May 12, 2026", "❌🟥 PASS"),
-        ("BFAM",  "May 12, 2026", "❌🟥 PASS"),
-        ("CLH",   "May 12, 2026", "❌🟥 PASS"),
-        ("WSO",   "May 12, 2026", "❌🟥 PASS"),
-        ("LII",   "May 12, 2026", "❌🟥 PASS"),
-        ("CSL",   "May 12, 2026", "❌🟥 PASS"),
+        ("CSWI",  "May 4, 2026"),
+        ("TRU",   "May 4, 2026"),
+        ("FIS",   "May 4, 2026"),
+        ("MSFT",  "May 4, 2026"),
+        ("CRWV",  "May 4, 2026"),
+        ("PANW",  "May 4, 2026"),
+        ("SOFI",  "May 4, 2026"),
+        ("PLTR",  "May 4, 2026"),
+        ("DDOG",  "May 4, 2026"),
+        ("COST",  "May 4, 2026"),
+        ("MCD",   "May 4, 2026"),
+        ("HSY",   "May 4, 2026"),
+        ("CL",    "May 4, 2026"),
+        ("AXP",   "May 4, 2026"),
+        ("PG",    "May 4, 2026"),
+        ("JNJ",   "May 4, 2026"),
+        ("PEP",   "May 4, 2026"),
+        ("WM",    "May 4, 2026"),
+        ("MNST",  "May 4, 2026"),
+        ("AZO",   "May 4, 2026"),
+        ("HD",    "May 4, 2026"),
+        ("ROST",  "May 4, 2026"),
+        ("LULU",  "May 4, 2026"),
+        ("BKNG",  "May 4, 2026"),
+        ("SBUX",  "May 4, 2026"),
+        ("CMG",   "May 4, 2026"),
+        ("CPRT",  "May 4, 2026"),
+        ("FAST",  "May 4, 2026"),
+        ("CTAS",  "May 4, 2026"),
+        ("CHWY",  "May 14, 2026"),
+        ("ITW",   "May 4, 2026"),
+        ("ROK",   "May 4, 2026"),
+        ("GEV",   "May 4, 2026"),
+        ("KEYS",  "May 4, 2026"),
+        ("VRT",   "May 4, 2026"),
+        ("LMT",   "May 4, 2026"),
+        ("HON",   "May 4, 2026"),
+        ("TXN",   "May 4, 2026"),
+        ("AMAT",  "May 4, 2026"),
+        ("DIS",   "May 4, 2026"),
+        ("VST",   "May 4, 2026"),
+        ("DVN",   "May 4, 2026"),
+        ("APA",   "May 4, 2026"),
+        ("ET",    "May 4, 2026"),
+        ("CEG",   "May 4, 2026"),
+        ("NEE",   "May 4, 2026"),
+        ("NVT",   "May 4, 2026"),
+        ("ORA",   "May 4, 2026"),
+        ("FSLR",  "May 4, 2026"),
+        ("LNG",   "May 4, 2026"),
+        ("CVX",   "May 4, 2026"),
+        ("AM",    "May 14, 2026"),
+        ("FLNG",  "May 4, 2026"),
+        ("CRSP",  "May 4, 2026"),
+        ("LZAGY", "May 4, 2026"),
+        ("NTLA",  "May 4, 2026"),
+        ("TWST",  "May 4, 2026"),
+        ("SEV",   "May 4, 2026"),
+        ("GRAIL", "May 4, 2026"),
+        ("GH",    "May 4, 2026"),
+        ("ASML",  "May 4, 2026"),
+        ("KGC",   "May 4, 2026"),
+        ("UBER",  "May 4, 2026"),
+        ("CERT",  "May 4, 2026"),
+        ("RKLB",  "May 4, 2026"),
+        ("RGTI",  "May 4, 2026"),
+        ("LLY",   "May 4, 2026"),
+        ("TMO",   "May 4, 2026"),
+        ("DHR",   "May 4, 2026"),
+        ("ISRG",  "May 4, 2026"),
+        ("SPGI",  "May 4, 2026"),
+        ("MCO",   "May 4, 2026"),
+        ("CSGP",  "May 4, 2026"),
+        ("TRUE",  "May 5, 2026"),
+        ("EFX",   "May 5, 2026"),
+        ("IT",    "May 5, 2026"),
+        ("ROP",   "May 5, 2026"),
+        ("MSCI",  "May 5, 2026"),
+        ("BR",    "May 5, 2026"),
+        ("FDS",   "May 5, 2026"),
+        ("RSG",   "May 5, 2026"),
+        ("TYL",   "May 5, 2026"),
+        ("SSNC",  "May 5, 2026"),
+        ("LDOS",  "May 5, 2026"),
+        ("J",     "May 5, 2026"),
+        ("BAH",   "May 5, 2026"),
+        ("CACI",  "May 5, 2026"),
+        ("EXPO",  "May 5, 2026"),
+        ("FCN",   "May 5, 2026"),
+        ("MORN",  "May 5, 2026"),
+        ("JKHY",  "May 5, 2026"),
+        ("CDW",   "May 5, 2026"),
+        ("PAYX",  "May 5, 2026"),
+        ("LUNR",  "May 5, 2026"),
+        ("BBAI",  "May 5, 2026"),
+        ("OMAB",  "May 5, 2026"),
+        ("LOPE",  "May 5, 2026"),
+        ("IDCC",  "May 11, 2026"),
+        ("FCFS",  "May 11, 2026"),
+        ("BRO",   "May 11, 2026"),
+        ("PRPO",  "May 11, 2026"),
+        ("CCEL",  "May 11, 2026"),
+        ("FRPT",  "May 11, 2026"),
+        ("OPFI",  "May 11, 2026"),
+        ("VEON",  "May 11, 2026"),
+        ("ENS",   "May 11, 2026"),
+        ("NUTX",  "May 11, 2026"),
+        ("WRB",   "May 12, 2026"),
+        ("ABBNY", "May 12, 2026"),
+        ("MRVL",  "May 12, 2026"),
+        ("OR",    "May 12, 2026"),
+        ("ROKU",  "May 12, 2026"),
+        ("CART",  "May 12, 2026"),
+        ("ALVO",  "May 12, 2026"),
+        ("TTWO",  "May 12, 2026"),
+        ("MSI",   "May 12, 2026"),
+        ("ZBRA",  "May 12, 2026"),
+        ("AJG",   "May 12, 2026"),
+        ("HEI",   "May 12, 2026"),
+        ("IDXX",  "May 12, 2026"),
+        ("WCN",   "May 12, 2026"),
+        ("BFAM",  "May 12, 2026"),
+        ("CLH",   "May 12, 2026"),
+        ("WSO",   "May 12, 2026"),
+        ("LII",   "May 12, 2026"),
+        ("CSL",   "May 12, 2026"),
     ]
-    for ticker, dt, verdict in pass_log:
-        c.execute("INSERT OR IGNORE INTO master_log (ticker,date_analyzed,verdict) VALUES (?,?,?)", (ticker, dt, verdict))
+    for ticker, dt in pass_log:
+        c.execute("INSERT INTO master_log (ticker, date_analyzed, verdict) VALUES (?,?,'PASS')", (ticker, dt))
 
     conn.commit()
     conn.close()
 
-# ── END OF CHUNK 1 — DO NOT PASTE ANYTHING BELOW THIS LINE YET ──
+
+# ── DATABASE BOOT SEQUENCE ──
+# FORCE_RESEED = True → wipes and rebuilds DB cleanly on every boot.
+# Set to False ONLY after confirming clean data in the app.
+FORCE_RESEED = True
+
+init_db()
+if FORCE_RESEED:
+    seed_v54_clean()
+
+
 def get_buy_list():
     conn = get_conn()
     df = pd.read_sql("SELECT * FROM buy_list ORDER BY capital_efficiency_score DESC", conn)
@@ -477,14 +512,12 @@ def check_hard_triggers(df_buy, df_hold):
     conn.close()
     return flags
 
-init_db()
-if not is_seeded():
-    seed_v54_clean()
 
+# ── SIDEBAR ──
 with st.sidebar:
     st.markdown("### 💙🦋 DREAM TEAM")
     st.markdown('<p class="mono" style="color:#8899aa;">Investment Analysis System</p>', unsafe_allow_html=True)
-    st.markdown('<p class="mono" style="color:#555e6e; font-size:0.75rem;">V54 — Unified 7 Points</p>', unsafe_allow_html=True)
+    st.markdown('<p class="mono" style="color:#555e6e; font-size:0.75rem;">V54 Clean — Unified 7 Points</p>', unsafe_allow_html=True)
     st.markdown("---")
     page = st.radio("Navigate",
         ["Dashboard", "Buy List", "Hold List", "Master Log",
@@ -498,11 +531,12 @@ with st.sidebar:
     st.markdown(f'<p class="mono" style="color:#ffc947;">Hold: {hold_count}</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="mono" style="color:#8899aa;">Log: {log_count}</p>', unsafe_allow_html=True)
     st.markdown("---")
-    st.markdown('<p style="font-family:JetBrains Mono,monospace; color:#e8e4d9; font-size:0.82rem; font-weight:600; margin:0;">Fundamentals first. Always.</p>', unsafe_allow_html=True)
-st.markdown('<p style="font-family:JetBrains Mono,monospace; color:#e8e4d9; font-size:0.82rem; font-weight:600; margin:0;">We are not desperate. We wait. 🐟</p>', unsafe_allow_html=True)
+    st.markdown('<p class="mono" style="color:#555e6e; font-size:0.72rem;">Fundamentals first. Always.</p>', unsafe_allow_html=True)
+    st.markdown('<p class="mono" style="color:#555e6e; font-size:0.72rem;">We are not desperate. We wait.</p>', unsafe_allow_html=True)
 
+# ── PAGES ──
 if page == "Dashboard":
-    st.markdown('<div class="header-block"><h1>Investment Analysis System</h1><p class="mono" style="color:#8899aa;">Unified 7 Points Standards | V55 | Dream Team</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block"><h1>Investment Analysis System</h1><p class="mono" style="color:#8899aa;">Unified 7 Points Standards | V54 Clean | Dream Team</p></div>', unsafe_allow_html=True)
     col1, col2, col3, col4 = st.columns(4)
     log_df = get_master_log()
     with col1:
@@ -530,7 +564,6 @@ if page == "Dashboard":
             nm = " <- NEW" if row["is_new"] else ""
             st.markdown(f'<div class="metric-card" style="border-left:3px solid #ffc947; padding:0.8rem 1rem;"><span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span><span style="color:#ffc947;">{nm}</span> &nbsp;<span class="mono" style="color:#8899aa;">${row["current_price"]:.2f}</span><span style="float:right;" class="mono"><span style="color:#ffc947;">Entry: ${row["fair_entry_low"]:.0f}-${row["fair_entry_high"]:.0f}</span> &nbsp;Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em></span></div>', unsafe_allow_html=True)
 
-# ── END OF CHUNK 2 — DO NOT PASTE ANYTHING BELOW THIS LINE YET ──
 elif page == "Buy List":
     st.markdown('<div class="header-block"><h1>Buy List</h1><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Upside% mid / Current Price)</p></div>', unsafe_allow_html=True)
     buy_df = get_buy_list()
@@ -563,73 +596,30 @@ elif page == "Hold List":
 
 elif page == "Master Log":
     st.markdown('<div class="header-block"><h1>Master Consolidated Log</h1><p class="mono" style="color:#8899aa;">Cross-reference every ticker here first. All sessions. All verdicts.</p></div>', unsafe_allow_html=True)
-
-    # ── styling helper ──
-    def verdict_style(verdict):
-        has_square = "🟥" in verdict or "🟨" in verdict
-        if "BUY" in verdict:
-            if has_square:
-                return "#3ddc84", "1px solid #3ddc84", "0d2b1a"
-            return "#1a6640", "1px solid #1a6640", "#061a0e"
-        elif "HARD PASS" in verdict:
-            if has_square:
-                return "#cc3333", "1px solid #cc3333", "#1a0a0a"
-            return "#5c1a1a", "1px solid #3d1111", "#0f0606"
-        elif "HOLD" in verdict:
-            if has_square:
-                return "#ffc947", "1px solid #ffc947", "#2b2200"
-            return "#7a6020", "1px solid #4d3c00", "#161000"
-        elif "PASS" in verdict:
-            if has_square:
-                return "#ff6b6b", "1px solid #ff6b6b", "#2b0d0d"
-            return "#7a3333", "1px solid #4d1f1f", "#150808"
-        return "#8899aa", "1px solid #2a3344", "#161b24"
-
     col_filter, col_search = st.columns([2, 3])
     with col_filter:
-        verdict_filter = st.selectbox("Filter by Verdict", [
-            "ALL",
-            "✅ BUY",
-            "⚠️ HOLD", "⚠️🟨 HOLD",
-            "🚫 HARD PASS", "🚫🟥 HARD PASS",
-            "❌ PASS", "❌🟥 PASS"
-        ])
+        verdict_filter = st.selectbox("Filter by Verdict", ["ALL", "BUY", "HOLD", "PASS", "HARD_PASS"])
     with col_search:
         search_term = st.text_input("Search Ticker", placeholder="e.g. GTLB")
-
-    all_log = get_master_log()
-    log_df = all_log if verdict_filter == "ALL" else all_log[all_log["verdict"] == verdict_filter]
+    log_df = get_master_log(verdict_filter if verdict_filter != "ALL" else None)
     if search_term:
         log_df = log_df[log_df["ticker"].str.upper().str.contains(search_term.upper())]
-
-    buy_n  = len(all_log[all_log["verdict"].str.contains("BUY",  na=False)])
-    hold_n = len(all_log[all_log["verdict"].str.contains("HOLD", na=False)])
-    hp_n   = len(all_log[all_log["verdict"].str.contains("HARD", na=False)])
-    pass_n = len(all_log[all_log["verdict"].str.contains("PASS", na=False) & ~all_log["verdict"].str.contains("HARD", na=False)])
-
+    all_log = get_master_log()
     c1, c2, c3, c4 = st.columns(4)
-    with c1: st.markdown(f'<div class="metric-card"><p class="mono" style="color:#3ddc84; margin:0;">BUY: {buy_n}</p></div>', unsafe_allow_html=True)
-    with c2: st.markdown(f'<div class="metric-card"><p class="mono" style="color:#ffc947; margin:0;">HOLD: {hold_n}</p></div>', unsafe_allow_html=True)
-    with c3: st.markdown(f'<div class="metric-card"><p class="mono" style="color:#ff6b6b; margin:0;">PASS: {pass_n}</p></div>', unsafe_allow_html=True)
-    with c4: st.markdown(f'<div class="metric-card"><p class="mono" style="color:#cc3333; margin:0;">HARD PASS: {hp_n}</p></div>', unsafe_allow_html=True)
-
+    with c1: st.markdown(f'<div class="metric-card"><p class="mono" style="color:#3ddc84; margin:0;">BUY: {len(all_log[all_log.verdict=="BUY"])}</p></div>', unsafe_allow_html=True)
+    with c2: st.markdown(f'<div class="metric-card"><p class="mono" style="color:#ffc947; margin:0;">HOLD: {len(all_log[all_log.verdict=="HOLD"])}</p></div>', unsafe_allow_html=True)
+    with c3: st.markdown(f'<div class="metric-card"><p class="mono" style="color:#ff6b6b; margin:0;">PASS: {len(all_log[all_log.verdict=="PASS"])}</p></div>', unsafe_allow_html=True)
+    with c4: st.markdown(f'<div class="metric-card"><p class="mono" style="color:#cc3333; margin:0;">HARD PASS: {len(all_log[all_log.verdict=="HARD_PASS"])}</p></div>', unsafe_allow_html=True)
     st.markdown(f'<p class="mono" style="color:#8899aa; font-size:0.8rem;">Showing {len(log_df)} records</p>', unsafe_allow_html=True)
-
     if log_df.empty:
         st.info("No records found.")
     else:
+        display_rows = []
         for _, row in log_df.iterrows():
-            color, border, bg = verdict_style(row["verdict"])
-            st.markdown(
-                f'<div style="background:#{bg}; border-left:3px solid {color}; border-top:{border}; '
-                f'border-right:{border}; border-bottom:{border}; border-radius:4px; '
-                f'padding:0.6rem 1rem; margin-bottom:0.4rem; display:flex; justify-content:space-between; align-items:center;">'
-                f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:{color}; font-size:0.95rem;">{row["ticker"]}</span>'
-                f'<span style="font-family:JetBrains Mono,monospace; color:{color}; font-size:0.85rem;">{row["verdict"]}</span>'
-                f'<span style="font-family:JetBrains Mono,monospace; color:#8899aa; font-size:0.78rem;">{row["date_analyzed"]}</span>'
-                f'<span style="font-family:JetBrains Mono,monospace; color:#555e6e; font-size:0.72rem;">{row["next_review"]}</span>'
-                f'</div>',
-                unsafe_allow_html=True)
+            v = row["verdict"]
+            badge = {"BUY": "BUY", "HOLD": "HOLD", "PASS": "PASS", "HARD_PASS": "HARD PASS"}.get(v, v)
+            display_rows.append({"Ticker": row["ticker"], "Date": row["date_analyzed"], "Verdict": badge, "Next Review": row["next_review"]})
+        st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
 
 elif page == "Ticker Lookup":
     st.markdown('<div class="header-block"><h1>Ticker Cross-Reference</h1><p class="mono" style="color:#8899aa;">Check Master Consolidated Log instantly before any analysis.</p></div>', unsafe_allow_html=True)
@@ -823,5 +813,4 @@ elif page == "Market Data Updates":
                     else:
                         st.error(f"{mp_ticker} not found in Hold List.")
 
-# ── END OF CHUNK 3 — FILE COMPLETE ──
-
+# ── END OF FILE ──
