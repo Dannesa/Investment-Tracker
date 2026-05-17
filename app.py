@@ -340,7 +340,7 @@ def seed_v54_clean():
 # ── DATABASE BOOT SEQUENCE ──
 # FORCE_RESEED = True → wipes and rebuilds DB cleanly on every boot.
 # Set to False ONLY after confirming clean data in the app.
-FORCE_RESEED = True
+FORCE_RESEED = False
 
 init_db()
 if FORCE_RESEED:
