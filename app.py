@@ -557,8 +557,8 @@ with st.sidebar:
     st.markdown(f'<p class="mono" style="color:#ffc947;">Hold: {hold_count}</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="mono" style="color:#8899aa;">Log: {log_count}</p>',   unsafe_allow_html=True)
     st.markdown("---")
-    st.markdown('<p class="mono" style="color:#555e6e; font-size:0.72rem;">Fundamentals first. Always.</p>', unsafe_allow_html=True)
-    st.markdown('<p class="mono" style="color:#555e6e; font-size:0.72rem;">We are not desperate. We wait. 🐟</p>', unsafe_allow_html=True)
+    st.markdown('<p class="mono" style="color:#e8e4d9; font-size:0.82rem; font-weight:600;">Fundamentals first. Always.</p>', unsafe_allow_html=True)
+    st.markdown('<p class="mono" style="color:#e8e4d9; font-size:0.82rem; font-weight:600;">We are not desperate. We wait. 🐟</p>', unsafe_allow_html=True)
 
 
 # ── PAGES ─────────────────────────────────────────────────────────────────────
@@ -710,14 +710,19 @@ elif page == "Master Log":
     if log_df.empty:
         st.info("No records found.")
     else:
+        # Border colors per verdict — full brightness (post-Unified) and muted (pre-Unified)
+        border_full = {"BUY": "#3ddc84", "HOLD": "#ffc947", "PASS": "#ff6b6b", "HARD_PASS": "#cc3333"}
+        border_muted = {"BUY": "#1a4a2a", "HOLD": "#3a2e00", "PASS": "#3a1010", "HARD_PASS": "#2a0a0a"}
+
         # Render rows with badge HTML — display layer reads is_unified integer directly
         for _, row in log_df.iterrows():
-            is_unified = int(row.get("is_unified", 0))
-            badge_html = verdict_badge_html(row["verdict"], is_unified)
+            is_unified   = int(row.get("is_unified", 0))
+            badge_html   = verdict_badge_html(row["verdict"], is_unified)
             ticker_color = "#e8e4d9" if is_unified else "#4a5568"
             date_color   = "#8899aa" if is_unified else "#3a4252"
+            border_color = border_full.get(row["verdict"], "#2a3344") if is_unified else border_muted.get(row["verdict"], "#1e2736")
             st.markdown(
-                f'<div class="metric-card" style="padding:0.6rem 1rem; margin-bottom:0.4rem;">'
+                f'<div class="metric-card" style="border-left:3px solid {border_color}; padding:0.6rem 1rem; margin-bottom:0.4rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:{ticker_color}; min-width:80px; display:inline-block;">{row["ticker"]}</span>'
                 f'&nbsp;&nbsp;{badge_html}&nbsp;&nbsp;'
                 f'<span class="mono" style="color:{date_color}; font-size:0.78rem;">{row["date_analyzed"]}</span>'
