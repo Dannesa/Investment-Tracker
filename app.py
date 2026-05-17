@@ -697,7 +697,7 @@ elif page == "Master Log":
     all_log = get_master_log()
 
     if search_term:
-        log_df = log_df[log_df["ticker"].str.upper().str.contains(search_term.upper())]
+        log_df = log_df[log_df["ticker"].str.upper() == search_term.upper()]
 
     c1, c2, c3, c4 = st.columns(4)
     with c1: st.markdown(f'<div class="metric-card"><p class="mono" style="color:#3ddc84; margin:0;">BUY: {len(all_log[all_log.verdict=="BUY"])}</p></div>', unsafe_allow_html=True)
