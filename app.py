@@ -710,11 +710,11 @@ elif page == "Master Log":
     if log_df.empty:
         st.info("No records found.")
     else:
-        # Border colors per verdict — full brightness (post-Unified) and muted (pre-Unified)
-        border_full = {"BUY": "#3ddc84", "HOLD": "#ffc947", "PASS": "#ff6b6b", "HARD_PASS": "#cc3333"}
+        # Full border colors per verdict — post-Unified vivid, pre-Unified deeply muted
+        border_full  = {"BUY": "#3ddc84", "HOLD": "#ffc947", "PASS": "#ff6b6b", "HARD_PASS": "#cc3333"}
         border_muted = {"BUY": "#1a4a2a", "HOLD": "#3a2e00", "PASS": "#3a1010", "HARD_PASS": "#2a0a0a"}
 
-        # Render rows with badge HTML — display layer reads is_unified integer directly
+        # Render rows — display layer reads is_unified integer directly, zero emoji parsing
         for _, row in log_df.iterrows():
             is_unified   = int(row.get("is_unified", 0))
             badge_html   = verdict_badge_html(row["verdict"], is_unified)
@@ -722,7 +722,7 @@ elif page == "Master Log":
             date_color   = "#8899aa" if is_unified else "#3a4252"
             border_color = border_full.get(row["verdict"], "#2a3344") if is_unified else border_muted.get(row["verdict"], "#1e2736")
             st.markdown(
-                f'<div class="metric-card" style="border-left:3px solid {border_color}; padding:0.6rem 1rem; margin-bottom:0.4rem;">'
+                f'<div class="metric-card" style="border:2px solid {border_color}; padding:0.6rem 1rem; margin-bottom:0.4rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:{ticker_color}; min-width:80px; display:inline-block;">{row["ticker"]}</span>'
                 f'&nbsp;&nbsp;{badge_html}&nbsp;&nbsp;'
                 f'<span class="mono" style="color:{date_color}; font-size:0.78rem;">{row["date_analyzed"]}</span>'
