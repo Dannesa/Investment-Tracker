@@ -260,7 +260,7 @@ def lookup_ticker(ticker):
     ticker = ticker.upper().strip()
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT verdict, date_analyzed, notes FROM master_log WHERE ticker=? ORDER BY id DESC LIMIT 1", (ticker,))
+    c.execute("SELECT verdict, date_analyzed, notes, is_unified FROM master_log WHERE ticker=? ORDER BY id DESC LIMIT 1", (ticker,))
     row = c.fetchone()
     conn.close()
     return row
@@ -422,7 +422,7 @@ with st.sidebar:
     log_count = len(get_master_log())
     st.markdown(f'<p class="mono" style="color:#3ddc84;">Buy: {buy_count}</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="mono" style="color:#ffc947;">Hold: {hold_count}</p>', unsafe_allow_html=True)
-    st.markdown(f'<p class="mono" style="color:#8899aa;">Log: {log_count}</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="mono" style="color:#2a7fff;">Log: {log_count}</p>', unsafe_allow_html=True)
     st.markdown("---")
     st.markdown('<p class="mono" style="color:#e8e4d9; font-size:0.72rem; font-weight:600;">Fundamentals first. Always.</p>', unsafe_allow_html=True)
     st.markdown('<p class="mono" style="color:#e8e4d9; font-size:0.72rem; font-weight:600;">We are not desperate. We wait. 🐟</p>', unsafe_allow_html=True)
@@ -532,14 +532,30 @@ elif page == "Ticker Lookup":
     if ticker_input:
         result = lookup_ticker(ticker_input)
         if result:
-            verdict, dt, notes = result
-            colors  = {"BUY": "#3ddc84", "HOLD": "#ffc947", "PASS": "#ff6b6b", "HARD_PASS": "#cc3333"}
+            verdict, dt, notes, is_unified = result
+            is_unified = int(is_unified) if is_unified is not None else 1
+            border_full  = {"BUY": "#3ddc84", "HOLD": "#ffc947", "PASS": "#ff6b6b", "HARD_PASS": "#cc3333"}
+            border_muted = {"BUY": "#1a4a2a", "HOLD": "#3a2e00", "PASS": "#3a1010", "HARD_PASS": "#2a0a0a"}
             labels  = {"BUY": "ALREADY ON BUY LIST", "HOLD": "ALREADY ON HOLD LIST", "PASS": "PREVIOUSLY PASSED", "HARD_PASS": "HARD PASS — PERMANENT"}
             actions = {"BUY": "Already approved and active. Report position + skip.", "HOLD": "Already analyzed, waiting for price trigger. Report + skip.", "PASS": "Did not meet standards. Re-evaluation Triggers quarterly.", "HARD_PASS": "Permanent exclusion. BPO/AI-vulnerable or full cyclical fail."}
-            col = colors.get(verdict, "#8899aa")
-            st.markdown(f'<div class="metric-card" style="border-left:4px solid {col};"><h3 style="color:{col}; font-family:JetBrains Mono,monospace;">{ticker_input} — {labels.get(verdict, verdict)}</h3><p class="mono">Date analyzed: {dt}</p><p class="mono" style="color:{col};">{actions.get(verdict, "")}</p>{("<p class=mono style=color:#8899aa;>" + notes + "</p>") if notes else ""}</div>', unsafe_allow_html=True)
+            border_col  = border_full.get(verdict, "#2a3344") if is_unified else border_muted.get(verdict, "#2a3344")
+            ticker_col  = "#e8e4d9" if is_unified else "#4a5568"
+            date_col    = "#8899aa" if is_unified else "#3a4252"
+            border_style = f"border: 2px solid {border_col}; border-left: 7px solid {border_col};" if is_unified else f"border-left: 7px solid {border_col};"
+            badge_html  = verdict_badge_html(verdict, is_unified)
+            action_text = actions.get(verdict, "")
+            notes_html  = f'<p class="mono" style="color:#8899aa;">{notes}</p>' if notes else ""
+            st.markdown(
+                f'<div class="metric-card" style="{border_style} padding: 1rem 1.4rem;">' 
+                f'<h3 style="color:{ticker_col}; font-family:JetBrains Mono,monospace; margin-bottom:0.5rem;">{ticker_input} — {labels.get(verdict, verdict)}</h3>'
+                f'<div style="margin-bottom:0.4rem;">{badge_html}</div>'
+                f'<p class="mono" style="color:{date_col}; margin:0.3rem 0;">Date analyzed: {dt}</p>'
+                f'<p class="mono" style="color:{border_col}; margin:0.3rem 0;">{action_text}</p>'
+                f'{notes_html}'
+                f'</div>',
+                unsafe_allow_html=True)
         else:
-            st.markdown(f'<div class="metric-card" style="border-left:4px solid #2a7fff;"><h3 style="color:#2a7fff; font-family:JetBrains Mono,monospace;">{ticker_input} — NOT FOUND IN LOG</h3><p class="mono">Proceed with full Unified 7 Points deep-dive analysis.</p><p class="mono" style="color:#8899aa;">After analysis: add verdict via Add / Update page.</p></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-card" style="border-left:7px solid #2a7fff;"><h3 style="color:#2a7fff; font-family:JetBrains Mono,monospace;">{ticker_input} — NOT FOUND IN LOG</h3><p class="mono">Proceed with full Unified 7 Points deep-dive analysis.</p><p class="mono" style="color:#8899aa;">After analysis: add verdict via Add / Update page.</p></div>', unsafe_allow_html=True)
 
 elif page == "Add / Update":
     st.markdown('<div class="header-block"><h1>Add / Update Ticker</h1><p class="mono" style="color:#8899aa;">HANDOFF line — auto-logs to correct table with Capital Efficiency Score.</p></div>', unsafe_allow_html=True)
