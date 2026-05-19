@@ -60,7 +60,7 @@ def log_counter_card(color, text):
         f'</div>'
     )
 
-def log_record_row(is_unified, border_color, ticker_color, date_color, ticker, date_str, badge_html, next_review):
+def log_record_row(is_unified, border_color, ticker_color, date_color, row_id, ticker, date_str, badge_html, next_review):
     """Master Log show-records rows.
     Post-Unified: full frame 2px + 7px left, full brightness color.
     Pre-Unified:  7px left only, muted color.
@@ -72,6 +72,7 @@ def log_record_row(is_unified, border_color, ticker_color, date_color, ticker, d
     return (
         f'<div class="metric-card" style="{border_style} padding: 0.7rem 1.2rem; margin-bottom: 0.4rem;">'
         f'<div style="display:flex; align-items:center; gap:1.2rem; flex-wrap:wrap;">'
+        f'<span class="mono" style="color:#555e6e; font-size:0.72rem; min-width:2rem;">#{row_id}</span>'
         f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; font-size:1rem; color:{ticker_color}; min-width:4rem;">{ticker}</span>'
         f'{badge_html}'
         f'<span class="mono" style="color:{date_color};">{date_str}</span>'
@@ -522,7 +523,7 @@ elif page == "Master Log":
             badge      = verdict_badge_html(v, is_unified)
             st.markdown(
                 log_record_row(is_unified, border_col, ticker_col, date_col,
-                               row["ticker"], row["date_analyzed"], badge, row["next_review"]),
+                               row["id"], row["ticker"], row["date_analyzed"], badge, row["next_review"]),
                 unsafe_allow_html=True)
 
 elif page == "Ticker Lookup":
