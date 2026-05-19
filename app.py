@@ -268,8 +268,16 @@ def add_master_log(ticker, date_str, verdict, notes="", is_unified=1):
     ticker = ticker.upper().strip()
     conn = get_conn()
     c = conn.cursor()
-    c.execute("INSERT INTO master_log (ticker, date_analyzed, verdict, notes, is_unified) VALUES (?,?,?,?,?)",
-              (ticker, date_str, verdict, notes, is_unified))
+    c.execute("SELECT id FROM master_log WHERE ticker=?", (ticker,))
+    existing = c.fetchone()
+    if existing:
+        c.execute("""UPDATE master_log
+                     SET date_analyzed=?, verdict=?, notes=?, is_unified=?
+                     WHERE ticker=?""",
+                  (date_str, verdict, notes, is_unified, ticker))
+    else:
+        c.execute("INSERT INTO master_log (ticker, date_analyzed, verdict, notes, is_unified) VALUES (?,?,?,?,?)",
+                  (ticker, date_str, verdict, notes, is_unified))
     conn.commit()
     conn.close()
 
@@ -660,6 +668,29 @@ elif page == "Add / Update":
                 if r_ticker_hold:
                     remove_from_hold(r_ticker_hold)
                     st.success(f"{r_ticker_hold} removed from Hold List.")
+        st.markdown("---")
+        st.markdown("#### Delete Entry from Master Log")
+        st.markdown('<p class="mono" style="color:#cc3333; font-size:0.85rem;">⚠️ Admin only — use to remove duplicate or erroneous rows. Check Master Log page for the correct row ID first.</p>', unsafe_allow_html=True)
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            d_id = st.number_input("Master Log Row ID", min_value=1, step=1, value=1)
+        with col_d2:
+            d_confirm = st.text_input("Type ticker to confirm deletion").upper().strip()
+        if st.button("Delete Master Log Entry"):
+            if d_id and d_confirm:
+                conn = get_conn()
+                c = conn.cursor()
+                c.execute("SELECT ticker, verdict, date_analyzed FROM master_log WHERE id=?", (int(d_id),))
+                row = c.fetchone()
+                if row and row[0] == d_confirm:
+                    c.execute("DELETE FROM master_log WHERE id=?", (int(d_id),))
+                    conn.commit()
+                    st.success(f"Deleted: ID {int(d_id)} — {row[0]} | {row[1]} | {row[2]}")
+                elif row and row[0] != d_confirm:
+                    st.error(f"Ticker mismatch — row ID {int(d_id)} belongs to {row[0]}, not {d_confirm}. Double-check before deleting.")
+                else:
+                    st.error(f"No row found with ID {int(d_id)}.")
+                conn.close()
 
 elif page == "Market Data Updates":
     st.markdown('<div class="header-block"><h1>Market Data Updates</h1><p class="mono" style="color:#8899aa;">Refreshes prices, recalculates CE Scores, checks Hard Trigger Flags.</p></div>', unsafe_allow_html=True)
