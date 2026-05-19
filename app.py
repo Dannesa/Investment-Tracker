@@ -260,7 +260,7 @@ def lookup_ticker(ticker):
     ticker = ticker.upper().strip()
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT verdict, date_analyzed, notes, is_unified FROM master_log WHERE ticker=? ORDER BY id DESC LIMIT 1", (ticker,))
+    c.execute("SELECT verdict, date_analyzed, notes, is_unified, id FROM master_log WHERE ticker=? ORDER BY id DESC LIMIT 1", (ticker,))
     row = c.fetchone()
     conn.close()
     return row
@@ -532,7 +532,7 @@ elif page == "Ticker Lookup":
     if ticker_input:
         result = lookup_ticker(ticker_input)
         if result:
-            verdict, dt, notes, is_unified = result
+            verdict, dt, notes, is_unified, row_id = result
             is_unified = int(is_unified) if is_unified is not None else 1
             border_full  = {"BUY": "#3ddc84", "HOLD": "#ffc947", "PASS": "#ff6b6b", "HARD_PASS": "#cc3333"}
             border_muted = {"BUY": "#1a4a2a", "HOLD": "#3a2e00", "PASS": "#3a1010", "HARD_PASS": "#2a0a0a"}
@@ -547,7 +547,7 @@ elif page == "Ticker Lookup":
             notes_html  = f'<p class="mono" style="color:#8899aa;">{notes}</p>' if notes else ""
             st.markdown(
                 f'<div class="metric-card" style="{border_style} padding: 1rem 1.4rem;">' 
-                f'<h3 style="color:{ticker_col}; font-family:JetBrains Mono,monospace; margin-bottom:0.5rem;">{ticker_input} — {labels.get(verdict, verdict)}</h3>'
+                f'<div style="display:flex; align-items:center; gap:0.8rem; margin-bottom:0.5rem;"><span class="mono" style="color:#555e6e; font-size:0.72rem;">#{row_id}</span><h3 style="color:{ticker_col}; font-family:JetBrains Mono,monospace; margin:0;">{ticker_input} — {labels.get(verdict, verdict)}</h3></div>'
                 f'<div style="margin-bottom:0.4rem;">{badge_html}</div>'
                 f'<p class="mono" style="color:{date_col}; margin:0.3rem 0;">Date analyzed: {dt}</p>'
                 f'<p class="mono" style="color:{border_col}; margin:0.3rem 0;">{action_text}</p>'
