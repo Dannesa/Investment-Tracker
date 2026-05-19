@@ -416,7 +416,7 @@ with st.sidebar:
     st.markdown(f'<p class="mono" style="color:#8899aa;">Log: {log_count}</p>', unsafe_allow_html=True)
     st.markdown("---")
     st.markdown('<p class="mono" style="color:#555e6e; font-size:0.72rem;">Fundamentals first. Always.</p>', unsafe_allow_html=True)
-    st.markdown('<p class="mono" style="color:#555e6e; font-size:0.72rem;">We are not desperate. We wait. 🐠</p>', unsafe_allow_html=True)
+    st.markdown('<p class="mono" style="color:#e8e4d9; font-size:0.85rem; font-weight:600;">We are not desperate. We wait. 🐟</p>', unsafe_allow_html=True)
 
 if page == "Dashboard":
     st.markdown('<div class="header-block"><h1>Investment Analysis System</h1><p class="mono" style="color:#8899aa;">Unified 7 Points Standards | V55 | Dream Team</p></div>', unsafe_allow_html=True)
