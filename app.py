@@ -43,9 +43,9 @@ div[data-testid="stSidebarContent"] { background-color: #0a0c10; border-right: 1
 # ── BORDER STYLE HELPERS ──────────────────────────────────────────────────────
 
 def dash_card(color, label, value, sub):
-    """Dashboard counter cards: thicker + brighter LEFT border only."""
+    """Dashboard counter cards: 7px left border, bright category color."""
     return (
-        f'<div class="metric-card" style="border-left: 5px solid {color};">'
+        f'<div class="metric-card" style="border-left: 7px solid {color};">'
         f'<p class="mono" style="color:#8899aa; margin:0; font-size:0.75rem;">{label}</p>'
         f'<h2 style="color:{color}; margin:0; font-family:JetBrains Mono,monospace;">{value}</h2>'
         f'<p class="mono" style="color:#555e6e; margin:0; font-size:0.75rem;">{sub}</p>'
@@ -53,17 +53,24 @@ def dash_card(color, label, value, sub):
     )
 
 def log_counter_card(color, text):
-    """Master Log counter cards: full frame border + thicker left = dimensional effect."""
+    """Master Log counter cards: full frame 2px + 7px left = dimensional effect."""
     return (
-        f'<div class="metric-card" style="border: 2px solid {color}; border-left: 5px solid {color};">'
+        f'<div class="metric-card" style="border: 2px solid {color}; border-left: 7px solid {color};">'
         f'<p class="mono" style="color:{color}; margin:0;">{text}</p>'
         f'</div>'
     )
 
-def log_record_row(border_color, ticker_color, date_color, ticker, date_str, badge_html, next_review):
-    """Master Log show-records rows: thicker left border only. Color passed in as-is — Pre/Post-Unified brightness untouched."""
+def log_record_row(is_unified, border_color, ticker_color, date_color, ticker, date_str, badge_html, next_review):
+    """Master Log show-records rows.
+    Post-Unified: full frame 2px + 7px left, full brightness color.
+    Pre-Unified:  7px left only, muted color.
+    """
+    if is_unified:
+        border_style = f"border: 2px solid {border_color}; border-left: 7px solid {border_color};"
+    else:
+        border_style = f"border-left: 7px solid {border_color};"
     return (
-        f'<div class="metric-card" style="border-left: 5px solid {border_color}; padding: 0.7rem 1.2rem; margin-bottom: 0.4rem;">'
+        f'<div class="metric-card" style="{border_style} padding: 0.7rem 1.2rem; margin-bottom: 0.4rem;">'
         f'<div style="display:flex; align-items:center; gap:1.2rem; flex-wrap:wrap;">'
         f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; font-size:1rem; color:{ticker_color}; min-width:4rem;">{ticker}</span>'
         f'{badge_html}'
@@ -409,13 +416,13 @@ with st.sidebar:
     st.markdown(f'<p class="mono" style="color:#8899aa;">Log: {log_count}</p>', unsafe_allow_html=True)
     st.markdown("---")
     st.markdown('<p class="mono" style="color:#555e6e; font-size:0.72rem;">Fundamentals first. Always.</p>', unsafe_allow_html=True)
-    st.markdown('<p class="mono" style="color:#555e6e; font-size:0.72rem;">We are not desperate. We wait.</p>', unsafe_allow_html=True)
+    st.markdown('<p class="mono" style="color:#555e6e; font-size:0.72rem;">We are not desperate. We wait. 🐠</p>', unsafe_allow_html=True)
 
 if page == "Dashboard":
     st.markdown('<div class="header-block"><h1>Investment Analysis System</h1><p class="mono" style="color:#8899aa;">Unified 7 Points Standards | V55 | Dream Team</p></div>', unsafe_allow_html=True)
     col1, col2, col3, col4 = st.columns(4)
     log_df = get_master_log()
-    # Dashboard counter cards — thicker + brighter LEFT border only
+    # Dashboard counter cards — 7px left border, bright category color
     with col1:
         st.markdown(dash_card("#3ddc84", "BUY LIST", buy_count, "active positions"), unsafe_allow_html=True)
     with col2:
@@ -483,7 +490,7 @@ elif page == "Master Log":
         log_df = log_df[log_df["ticker"].str.upper().str.contains(search_term.upper())]
     all_log = get_master_log()
 
-    # Master Log counter cards — full frame border + thicker left
+    # Master Log counter cards — full frame 2px + 7px left
     c1, c2, c3, c4 = st.columns(4)
     with c1: st.markdown(log_counter_card("#3ddc84", f"BUY: {len(all_log[all_log.verdict=='BUY'])}"), unsafe_allow_html=True)
     with c2: st.markdown(log_counter_card("#ffc947", f"HOLD: {len(all_log[all_log.verdict=='HOLD'])}"), unsafe_allow_html=True)
@@ -495,7 +502,7 @@ elif page == "Master Log":
     if log_df.empty:
         st.info("No records found.")
     else:
-        # Show records rows — thicker left border only, Pre/Post-Unified colors/brightness untouched
+        # Show records: post-Unified = full frame + 7px left | pre-Unified = 7px left only
         border_full  = {"BUY": "#3ddc84", "HOLD": "#ffc947", "PASS": "#ff6b6b", "HARD_PASS": "#cc3333"}
         border_muted = {"BUY": "#1a4a2a", "HOLD": "#3a2e00", "PASS": "#3a1010", "HARD_PASS": "#2a0a0a"}
         for _, row in log_df.iterrows():
@@ -506,7 +513,7 @@ elif page == "Master Log":
             date_col   = "#8899aa" if is_unified else "#3a4252"
             badge      = verdict_badge_html(v, is_unified)
             st.markdown(
-                log_record_row(border_col, ticker_col, date_col,
+                log_record_row(is_unified, border_col, ticker_col, date_col,
                                row["ticker"], row["date_analyzed"], badge, row["next_review"]),
                 unsafe_allow_html=True)
 
