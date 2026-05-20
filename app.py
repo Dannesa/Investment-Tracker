@@ -465,7 +465,7 @@ if page == "Dashboard":
                 f'<span style="color:#ffc947;">{nm}</span> &nbsp;'
                 f'<span class="mono" style="color:#e8e4d9;">${row["current_price"]:.2f}</span>'
                 f'<span style="float:right;" class="mono">'
-                f'<span style="color:#ffc947;">Mid Entry: ${row["mid_fair_entry"]:.0f}</span>'
+                f'<span style="color:#ffc947;">Mid Entry: ${row["mid_fair_entry"]:.2f}</span>'
                 f'&nbsp; Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
                 f'</span></div>',
                 unsafe_allow_html=True)
@@ -738,45 +738,54 @@ elif page == "Add / Update":
                 conn.close()
 
 elif page == "Market Data Updates":
-    st.markdown('<div class="header-block"><h1>Market Data Updates</h1><p class="mono" style="color:#8899aa;">Refreshes prices, recalculates CE Scores, checks Hard Trigger Flags.</p></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="header-block">' 
+        '<h1>Market Data Updates</h1>'
+        '<p class="mono" style="color:#8899aa; font-size:0.72rem;">Refreshes prices, recalculates CE Scores, checks Hard Trigger Flags.</p>'
+        '</div>', unsafe_allow_html=True)
     if not YFINANCE_AVAILABLE:
         st.error("yfinance not installed. Run: pip install yfinance")
     else:
-        st.markdown('<p class="mono" style="color:#3ddc84;">yfinance available</p>', unsafe_allow_html=True)
-    col_a, col_b = st.columns([1, 1])
+        st.markdown('<p class="mono" style="color:#3ddc84; font-size:0.72rem;">yfinance available</p>', unsafe_allow_html=True)
+    col_a, col_b = st.columns([4, 5])
     with col_a:
-        st.markdown('<p class="mono" style="color:#3ddc84; font-weight:600; font-size:0.95rem;">Current — Buy List</p>', unsafe_allow_html=True)
+        st.markdown('<h3 style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:1.1rem; margin-bottom:0.5rem;">Current — Buy List</h3>', unsafe_allow_html=True)
         buy_df = get_buy_list()
         if not buy_df.empty:
             disp = buy_df[["ticker","current_price","mid_upside","capital_efficiency_score","date_added"]].copy()
             disp.columns = ["Ticker","Price","Mid Upside %","CE Score","Date"]
+            st.markdown('<div style="border: 2px solid #3ddc84; border-left: 7px solid #3ddc84; border-radius:4px; padding: 0.4rem; background:#0d1a0f;">', unsafe_allow_html=True)
             st.dataframe(
                 disp,
                 use_container_width=True,
                 hide_index=True,
                 column_config={
+                    "Ticker": st.column_config.TextColumn("Ticker"),
                     "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
                     "Mid Upside %": st.column_config.NumberColumn("Mid Upside %", format="%.1f%%"),
                     "CE Score": st.column_config.NumberColumn("CE Score", format="%.2f"),
+                    "Date": st.column_config.TextColumn("Date"),
                 })
-        st.markdown('<div style="border: 2px solid #3ddc84; border-left: 7px solid #3ddc84; border-radius:4px; margin-top:-0.5rem; padding:0.1rem;"></div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
     with col_b:
-        st.markdown('<p class="mono" style="color:#ffc947; font-weight:600; font-size:0.95rem;">Current — Hold List</p>', unsafe_allow_html=True)
+        st.markdown('<h3 style="color:#ffc947; font-family:JetBrains Mono,monospace; font-size:1.1rem; margin-bottom:0.5rem;">Current — Hold List</h3>', unsafe_allow_html=True)
         hold_df = get_hold_list()
         if not hold_df.empty:
             disp = hold_df[["ticker","current_price","mid_upside","mid_fair_entry","capital_efficiency_score"]].copy()
             disp.columns = ["Ticker","Price","Mid Upside %","Mid Fair Entry","CE Score"]
+            st.markdown('<div style="border: 2px solid #ffc947; border-left: 7px solid #ffc947; border-radius:4px; padding: 0.4rem; background:#1a1500;">', unsafe_allow_html=True)
             st.dataframe(
                 disp,
                 use_container_width=True,
                 hide_index=True,
                 column_config={
+                    "Ticker": st.column_config.TextColumn("Ticker"),
                     "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
                     "Mid Fair Entry": st.column_config.NumberColumn("Mid Fair Entry", format="$%.2f"),
                     "Mid Upside %": st.column_config.NumberColumn("Mid Upside %", format="%.1f%%"),
                     "CE Score": st.column_config.NumberColumn("CE Score", format="%.2f"),
                 })
-        st.markdown('<div style="border: 2px solid #ffc947; border-left: 7px solid #ffc947; border-radius:4px; margin-top:-0.5rem; padding:0.1rem;"></div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
     st.markdown("---")
     if st.button("RUN MARKET DATA UPDATE", type="primary"):
         with st.spinner("Fetching live prices from Yahoo Finance..."):
