@@ -449,13 +449,13 @@ if page == "Dashboard":
         buy_df = get_buy_list()
         for _, row in buy_df.iterrows():
             nm = " <- NEW" if row["is_new"] else ""
-            st.markdown(f'<div class="metric-card" style="border-left:3px solid #3ddc84; padding:0.8rem 1rem;"><span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span><span style="color:#3ddc84;">{nm}</span> &nbsp;<span class="mono" style="color:#8899aa;">${row["current_price"]:.2f}</span><span style="float:right;" class="mono"><span style="color:#3ddc84;">{row["upside_low"]:.0f}-{row["upside_high"]:.0f}% upside</span> &nbsp;Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em></span></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-card" style="border-left:3px solid #3ddc84; padding:0.8rem 1rem;"><span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span><span style="color:#3ddc84;">{nm}</span> &nbsp;<span class="mono" style="color:#e8e4d9;">${row["current_price"]:.2f}</span><span style="float:right;" class="mono"><span style="color:#3ddc84;">{row["upside_low"]:.0f}-{row["upside_high"]:.0f}% upside</span> &nbsp;Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em></span></div>', unsafe_allow_html=True)
     with col_h:
         st.markdown("#### Hold List — Ranked by Efficiency")
         hold_df = get_hold_list()
         for _, row in hold_df.iterrows():
             nm = " <- NEW" if row["is_new"] else ""
-            st.markdown(f'<div class="metric-card" style="border-left:3px solid #ffc947; padding:0.8rem 1rem;"><span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span><span style="color:#ffc947;">{nm}</span> &nbsp;<span class="mono" style="color:#8899aa;">${row["current_price"]:.2f}</span><span style="float:right;" class="mono"><span style="color:#ffc947;">Entry: ${row["fair_entry_low"]:.0f}-${row["fair_entry_high"]:.0f}</span> &nbsp;Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em></span></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-card" style="border-left:3px solid #ffc947; padding:0.8rem 1rem;"><span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span><span style="color:#ffc947;">{nm}</span> &nbsp;<span class="mono" style="color:#e8e4d9;">${row["current_price"]:.2f}</span><span style="float:right;" class="mono"><span style="color:#ffc947;">Entry: ${row["fair_entry_low"]:.0f}-${row["fair_entry_high"]:.0f}</span> &nbsp;Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em></span></div>', unsafe_allow_html=True)
 
 elif page == "Buy List":
     st.markdown('<div class="header-block"><h1>Buy List</h1><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Upside% mid / Current Price)</p></div>', unsafe_allow_html=True)
