@@ -751,7 +751,7 @@ elif page == "Market Data Updates":
     col_a, col_b = st.columns([4, 5])
 
     def buy_html_table(df):
-        hdr = "background:#0f2a1a; color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #3ddc84;"
+        hdr = "background:#0a1f10; color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #3ddc84;"
         cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #1a2a1a;"
         rows = ""
         for _, r in df.iterrows():
