@@ -748,70 +748,74 @@ elif page == "Market Data Updates":
         st.error("yfinance not installed. Run: pip install yfinance")
     else:
         st.markdown('<p class="mono" style="color:#3ddc84; font-size:0.72rem;">yfinance available</p>', unsafe_allow_html=True)
-    # Inject CSS for table header styling + centering
-    st.markdown("""
-    <style>
-    [data-testid="stDataFrame"] thead tr th {
-        text-align: center !important;
-        font-family: 'JetBrains Mono', monospace !important;
-        font-size: 0.8rem !important;
-        font-weight: 700 !important;
-        color: #e8e4d9 !important;
-    }
-    [data-testid="stDataFrame"] tbody tr td {
-        text-align: center !important;
-        font-family: 'JetBrains Mono', monospace !important;
-        font-size: 0.82rem !important;
-    }
-    div[data-testid="stDataFrame"]:first-of-type thead tr th {
-        background-color: #0d2b1a !important;
-        color: #3ddc84 !important;
-    }
-    div[data-testid="stDataFrame"]:last-of-type thead tr th {
-        background-color: #2b2200 !important;
-        color: #ffc947 !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
     col_a, col_b = st.columns([4, 5])
+
+    def buy_html_table(df):
+        hdr = "background:#0d2b1a; color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #3ddc84;"
+        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.45rem 0.4rem; border-bottom:1px solid #1a2a1a;"
+        rows = ""
+        for _, r in df.iterrows():
+            rows += (
+                f'<tr>'
+                f'<td style="{cell}">{r["ticker"]}</td>'
+                f'<td style="{cell}">${r["current_price"]:.2f}</td>'
+                f'<td style="{cell}">{r["mid_upside"]:.1f}%</td>'
+                f'<td style="{cell}">{r["capital_efficiency_score"]:.2f}</td>'
+                f'<td style="{cell}">{r["date_added"]}</td>'
+                f'</tr>'
+            )
+        return (
+            f'<div style="border:2px solid #3ddc84; border-left:7px solid #3ddc84; border-radius:5px; overflow:hidden;">'
+            f'<table style="width:100%; border-collapse:collapse; background:#0d0f14;">'
+            f'<thead><tr>'
+            f'<th style="{hdr}">Ticker</th>'
+            f'<th style="{hdr}">Price</th>'
+            f'<th style="{hdr}">Mid Upside %</th>'
+            f'<th style="{hdr}">CE Score</th>'
+            f'<th style="{hdr}">Date</th>'
+            f'</tr></thead>'
+            f'<tbody>{rows}</tbody>'
+            f'</table></div>'
+        )
+
+    def hold_html_table(df):
+        hdr = "background:#2b2200; color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #ffc947;"
+        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.45rem 0.4rem; border-bottom:1px solid #2a2000;"
+        rows = ""
+        for _, r in df.iterrows():
+            rows += (
+                f'<tr>'
+                f'<td style="{cell}">{r["ticker"]}</td>'
+                f'<td style="{cell}">${r["current_price"]:.2f}</td>'
+                f'<td style="{cell}">{r["mid_upside"]:.1f}%</td>'
+                f'<td style="{cell}">${r["mid_fair_entry"]:.2f}</td>'
+                f'<td style="{cell}">{r["capital_efficiency_score"]:.2f}</td>'
+                f'</tr>'
+            )
+        return (
+            f'<div style="border:2px solid #ffc947; border-left:7px solid #ffc947; border-radius:5px; overflow:hidden;">'
+            f'<table style="width:100%; border-collapse:collapse; background:#0d0f14;">'
+            f'<thead><tr>'
+            f'<th style="{hdr}">Ticker</th>'
+            f'<th style="{hdr}">Price</th>'
+            f'<th style="{hdr}">Mid Upside %</th>'
+            f'<th style="{hdr}">Mid Fair Entry</th>'
+            f'<th style="{hdr}">CE Score</th>'
+            f'</tr></thead>'
+            f'<tbody>{rows}</tbody>'
+            f'</table></div>'
+        )
+
     with col_a:
-        st.markdown('<h3 style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:1.1rem; margin-bottom:0.3rem;">Current — Buy List</h3>', unsafe_allow_html=True)
+        st.markdown('<h3 style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:1.1rem; margin-bottom:0.4rem;">Current — Buy List</h3>', unsafe_allow_html=True)
         buy_df = get_buy_list()
         if not buy_df.empty:
-            disp = buy_df[["ticker","current_price","mid_upside","capital_efficiency_score","date_added"]].copy()
-            disp.columns = ["Ticker","Price","Mid Upside %","CE Score","Date"]
-            st.markdown('<div style="border: 2px solid #3ddc84; border-left: 7px solid #3ddc84; border-radius:5px; overflow:hidden; margin-bottom:0.5rem;">', unsafe_allow_html=True)
-            st.dataframe(
-                disp,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Ticker": st.column_config.TextColumn("Ticker"),
-                    "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
-                    "Mid Upside %": st.column_config.NumberColumn("Mid Upside %", format="%.1f%%"),
-                    "CE Score": st.column_config.NumberColumn("CE Score", format="%.2f"),
-                    "Date": st.column_config.TextColumn("Date"),
-                })
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown(buy_html_table(buy_df), unsafe_allow_html=True)
     with col_b:
-        st.markdown('<h3 style="color:#ffc947; font-family:JetBrains Mono,monospace; font-size:1.1rem; margin-bottom:0.3rem;">Current — Hold List</h3>', unsafe_allow_html=True)
+        st.markdown('<h3 style="color:#ffc947; font-family:JetBrains Mono,monospace; font-size:1.1rem; margin-bottom:0.4rem;">Current — Hold List</h3>', unsafe_allow_html=True)
         hold_df = get_hold_list()
         if not hold_df.empty:
-            disp = hold_df[["ticker","current_price","mid_upside","mid_fair_entry","capital_efficiency_score"]].copy()
-            disp.columns = ["Ticker","Price","Mid Upside %","Mid Fair Entry","CE Score"]
-            st.markdown('<div style="border: 2px solid #ffc947; border-left: 7px solid #ffc947; border-radius:5px; overflow:hidden; margin-bottom:0.5rem;">', unsafe_allow_html=True)
-            st.dataframe(
-                disp,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Ticker": st.column_config.TextColumn("Ticker"),
-                    "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
-                    "Mid Fair Entry": st.column_config.NumberColumn("Mid Fair Entry", format="$%.2f"),
-                    "Mid Upside %": st.column_config.NumberColumn("Mid Upside %", format="%.1f%%"),
-                    "CE Score": st.column_config.NumberColumn("CE Score", format="%.2f"),
-                })
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown(hold_html_table(hold_df), unsafe_allow_html=True)
     st.markdown("---")
     if st.button("RUN MARKET DATA UPDATE", type="primary"):
         with st.spinner("Fetching live prices from Yahoo Finance..."):
