@@ -99,14 +99,12 @@ def get_conn():
 def init_db():
     conn = get_conn()
     c = conn.cursor()
-    # Fresh schema — single midpoint values
-    c.execute("DROP TABLE IF EXISTS buy_list")
-    c.execute("DROP TABLE IF EXISTS hold_list")
-    c.execute("""CREATE TABLE buy_list (
+    # Schema — single midpoint values
+    c.execute("""CREATE TABLE IF NOT EXISTS buy_list (
         ticker TEXT PRIMARY KEY, current_price REAL, mid_upside REAL,
         capital_efficiency_score REAL, institutional_money TEXT DEFAULT 'Pending',
         date_added TEXT, is_new INTEGER DEFAULT 0, notes TEXT DEFAULT '')""")
-    c.execute("""CREATE TABLE hold_list (
+    c.execute("""CREATE TABLE IF NOT EXISTS hold_list (
         ticker TEXT PRIMARY KEY, current_price REAL, mid_upside REAL,
         mid_fair_entry REAL, capital_efficiency_score REAL,
         date_added TEXT, is_new INTEGER DEFAULT 0, notes TEXT DEFAULT '')""")
