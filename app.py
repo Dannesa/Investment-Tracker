@@ -465,7 +465,8 @@ if page == "Dashboard":
                 f'<span style="color:#ffc947;">{nm}</span> &nbsp;'
                 f'<span class="mono" style="color:#e8e4d9;">${row["current_price"]:.2f}</span>'
                 f'<span style="float:right;" class="mono">'
-                f'<span style="color:#ffc947;">Mid Entry: ${row["mid_fair_entry"]:.2f}</span>'
+                f'<span style="color:#ffc947;">Mid Upside: {row["mid_upside"]:.1f}%</span>'
+                f'&nbsp; Mid Entry: <span style="color:#ffc947;">${row["mid_fair_entry"]:.2f}</span>'
                 f'&nbsp; Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
                 f'</span></div>',
                 unsafe_allow_html=True)
@@ -747,14 +748,39 @@ elif page == "Market Data Updates":
         st.error("yfinance not installed. Run: pip install yfinance")
     else:
         st.markdown('<p class="mono" style="color:#3ddc84; font-size:0.72rem;">yfinance available</p>', unsafe_allow_html=True)
+    # Inject CSS for table header styling + centering
+    st.markdown("""
+    <style>
+    [data-testid="stDataFrame"] thead tr th {
+        text-align: center !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 0.8rem !important;
+        font-weight: 700 !important;
+        color: #e8e4d9 !important;
+    }
+    [data-testid="stDataFrame"] tbody tr td {
+        text-align: center !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 0.82rem !important;
+    }
+    div[data-testid="stDataFrame"]:first-of-type thead tr th {
+        background-color: #0d2b1a !important;
+        color: #3ddc84 !important;
+    }
+    div[data-testid="stDataFrame"]:last-of-type thead tr th {
+        background-color: #2b2200 !important;
+        color: #ffc947 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     col_a, col_b = st.columns([4, 5])
     with col_a:
-        st.markdown('<h3 style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:1.1rem; margin-bottom:0.5rem;">Current — Buy List</h3>', unsafe_allow_html=True)
+        st.markdown('<h3 style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:1.1rem; margin-bottom:0.3rem;">Current — Buy List</h3>', unsafe_allow_html=True)
         buy_df = get_buy_list()
         if not buy_df.empty:
             disp = buy_df[["ticker","current_price","mid_upside","capital_efficiency_score","date_added"]].copy()
             disp.columns = ["Ticker","Price","Mid Upside %","CE Score","Date"]
-            st.markdown('<div style="border: 2px solid #3ddc84; border-left: 7px solid #3ddc84; border-radius:4px; padding: 0.4rem; background:#0d1a0f;">', unsafe_allow_html=True)
+            st.markdown('<div style="border: 2px solid #3ddc84; border-left: 7px solid #3ddc84; border-radius:5px; overflow:hidden; margin-bottom:0.5rem;">', unsafe_allow_html=True)
             st.dataframe(
                 disp,
                 use_container_width=True,
@@ -768,12 +794,12 @@ elif page == "Market Data Updates":
                 })
             st.markdown('</div>', unsafe_allow_html=True)
     with col_b:
-        st.markdown('<h3 style="color:#ffc947; font-family:JetBrains Mono,monospace; font-size:1.1rem; margin-bottom:0.5rem;">Current — Hold List</h3>', unsafe_allow_html=True)
+        st.markdown('<h3 style="color:#ffc947; font-family:JetBrains Mono,monospace; font-size:1.1rem; margin-bottom:0.3rem;">Current — Hold List</h3>', unsafe_allow_html=True)
         hold_df = get_hold_list()
         if not hold_df.empty:
             disp = hold_df[["ticker","current_price","mid_upside","mid_fair_entry","capital_efficiency_score"]].copy()
             disp.columns = ["Ticker","Price","Mid Upside %","Mid Fair Entry","CE Score"]
-            st.markdown('<div style="border: 2px solid #ffc947; border-left: 7px solid #ffc947; border-radius:4px; padding: 0.4rem; background:#1a1500;">', unsafe_allow_html=True)
+            st.markdown('<div style="border: 2px solid #ffc947; border-left: 7px solid #ffc947; border-radius:5px; overflow:hidden; margin-bottom:0.5rem;">', unsafe_allow_html=True)
             st.dataframe(
                 disp,
                 use_container_width=True,
