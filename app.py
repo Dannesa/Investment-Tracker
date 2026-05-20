@@ -127,10 +127,13 @@ def init_db():
 def is_seeded():
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM buy_list")
-    n = c.fetchone()[0]
+    try:
+        c.execute("SELECT COUNT(*) FROM master_log WHERE verdict='BUY'")
+        n = c.fetchone()[0]
+    except Exception:
+        n = 0
     conn.close()
-    return n > 0
+    return n >= 4
 
 def seed_v55():
     conn = get_conn()
@@ -742,21 +745,40 @@ elif page == "Market Data Updates":
         st.error("yfinance not installed. Run: pip install yfinance")
     else:
         st.markdown('<p class="mono" style="color:#3ddc84;">yfinance available</p>', unsafe_allow_html=True)
-    col_a, col_b = st.columns([2, 1])
+    col_a, col_b = st.columns([1, 1])
     with col_a:
-        st.markdown("#### Current — Buy List")
+        st.markdown('<p class="mono" style="color:#3ddc84; font-weight:600; font-size:0.95rem;">Current — Buy List</p>', unsafe_allow_html=True)
         buy_df = get_buy_list()
         if not buy_df.empty:
             disp = buy_df[["ticker","current_price","mid_upside","capital_efficiency_score","date_added"]].copy()
             disp.columns = ["Ticker","Price","Mid Upside %","CE Score","Date"]
-            st.dataframe(disp, use_container_width=True, hide_index=True)
+            st.dataframe(
+                disp,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                    "Mid Upside %": st.column_config.NumberColumn("Mid Upside %", format="%.1f%%"),
+                    "CE Score": st.column_config.NumberColumn("CE Score", format="%.2f"),
+                })
+        st.markdown('<div style="border: 2px solid #3ddc84; border-left: 7px solid #3ddc84; border-radius:4px; margin-top:-0.5rem; padding:0.1rem;"></div>', unsafe_allow_html=True)
     with col_b:
-        st.markdown("#### Current — Hold List")
+        st.markdown('<p class="mono" style="color:#ffc947; font-weight:600; font-size:0.95rem;">Current — Hold List</p>', unsafe_allow_html=True)
         hold_df = get_hold_list()
         if not hold_df.empty:
             disp = hold_df[["ticker","current_price","mid_upside","mid_fair_entry","capital_efficiency_score"]].copy()
-            disp.columns = ["Ticker","Price","Mid Upside %","Mid Fair Entry $","CE Score"]
-            st.dataframe(disp, use_container_width=True, hide_index=True)
+            disp.columns = ["Ticker","Price","Mid Upside %","Mid Fair Entry","CE Score"]
+            st.dataframe(
+                disp,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                    "Mid Fair Entry": st.column_config.NumberColumn("Mid Fair Entry", format="$%.2f"),
+                    "Mid Upside %": st.column_config.NumberColumn("Mid Upside %", format="%.1f%%"),
+                    "CE Score": st.column_config.NumberColumn("CE Score", format="%.2f"),
+                })
+        st.markdown('<div style="border: 2px solid #ffc947; border-left: 7px solid #ffc947; border-radius:4px; margin-top:-0.5rem; padding:0.1rem;"></div>', unsafe_allow_html=True)
     st.markdown("---")
     if st.button("RUN MARKET DATA UPDATE", type="primary"):
         with st.spinner("Fetching live prices from Yahoo Finance..."):
