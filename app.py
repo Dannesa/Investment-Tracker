@@ -807,12 +807,12 @@ elif page == "Market Data Updates":
         )
 
     with col_a:
-        st.markdown('<h3 style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:1.1rem; margin-bottom:0.4rem;">Current — Buy List</h3>', unsafe_allow_html=True)
+        st.markdown('<h3 style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:1.5rem; margin-bottom:0.4rem;">Current — Buy List</h3>', unsafe_allow_html=True)
         buy_df = get_buy_list()
         if not buy_df.empty:
             st.markdown(buy_html_table(buy_df), unsafe_allow_html=True)
     with col_b:
-        st.markdown('<h3 style="color:#ffc947; font-family:JetBrains Mono,monospace; font-size:1.1rem; margin-bottom:0.4rem;">Current — Hold List</h3>', unsafe_allow_html=True)
+        st.markdown('<h3 style="color:#ffc947; font-family:JetBrains Mono,monospace; font-size:1.5rem; margin-bottom:0.4rem;">Current — Hold List</h3>', unsafe_allow_html=True)
         hold_df = get_hold_list()
         if not hold_df.empty:
             st.markdown(hold_html_table(hold_df), unsafe_allow_html=True)
