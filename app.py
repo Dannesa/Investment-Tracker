@@ -751,8 +751,8 @@ elif page == "Market Data Updates":
     col_a, col_b = st.columns([4, 5])
 
     def buy_html_table(df):
-        hdr = "background:#0d2b1a; color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #3ddc84;"
-        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.45rem 0.4rem; border-bottom:1px solid #1a2a1a;"
+        hdr = "background:#0f2a1a; color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #3ddc84;"
+        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #1a2a1a;"
         rows = ""
         for _, r in df.iterrows():
             rows += (
@@ -765,7 +765,7 @@ elif page == "Market Data Updates":
                 f'</tr>'
             )
         return (
-            f'<div style="border:2px solid #3ddc84; border-left:7px solid #3ddc84; border-radius:5px; overflow:hidden;">'
+            f'<div style="border:3px solid #3ddc84; border-left:7px solid #3ddc84; border-radius:5px; overflow:hidden;">'
             f'<table style="width:100%; border-collapse:collapse; background:#0d0f14;">'
             f'<thead><tr>'
             f'<th style="{hdr}">Ticker</th>'
@@ -780,7 +780,7 @@ elif page == "Market Data Updates":
 
     def hold_html_table(df):
         hdr = "background:#2b2200; color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #ffc947;"
-        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.45rem 0.4rem; border-bottom:1px solid #2a2000;"
+        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000;"
         rows = ""
         for _, r in df.iterrows():
             rows += (
@@ -793,7 +793,7 @@ elif page == "Market Data Updates":
                 f'</tr>'
             )
         return (
-            f'<div style="border:2px solid #ffc947; border-left:7px solid #ffc947; border-radius:5px; overflow:hidden;">'
+            f'<div style="border:3px solid #ffc947; border-left:7px solid #ffc947; border-radius:5px; overflow:hidden;">'
             f'<table style="width:100%; border-collapse:collapse; background:#0d0f14;">'
             f'<thead><tr>'
             f'<th style="{hdr}">Ticker</th>'
@@ -807,12 +807,12 @@ elif page == "Market Data Updates":
         )
 
     with col_a:
-        st.markdown('<h3 style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:1.5rem; margin-bottom:0.4rem;">Current — Buy List</h3>', unsafe_allow_html=True)
+        st.markdown('<h3 style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:1.8rem; margin-bottom:0.4rem;">Current — Buy List</h3>', unsafe_allow_html=True)
         buy_df = get_buy_list()
         if not buy_df.empty:
             st.markdown(buy_html_table(buy_df), unsafe_allow_html=True)
     with col_b:
-        st.markdown('<h3 style="color:#ffc947; font-family:JetBrains Mono,monospace; font-size:1.5rem; margin-bottom:0.4rem;">Current — Hold List</h3>', unsafe_allow_html=True)
+        st.markdown('<h3 style="color:#ffc947; font-family:JetBrains Mono,monospace; font-size:1.8rem; margin-bottom:0.4rem;">Current — Hold List</h3>', unsafe_allow_html=True)
         hold_df = get_hold_list()
         if not hold_df.empty:
             st.markdown(hold_html_table(hold_df), unsafe_allow_html=True)
