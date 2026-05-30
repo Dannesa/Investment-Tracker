@@ -537,7 +537,7 @@ elif page == "Hold List":
         st.markdown(f'<p class="mono" style="color:#ffc947;">Total: {len(hold_df)} tickers | Hard Trigger Flags: All Clear</p>', unsafe_allow_html=True)
 
 elif page == "Master Log":
-    st.markdown('<div class="header-block"><h1 style="color:#2a7fff;">Master Consolidated Log</h1><p class="mono" style="color:#8899aa;">Cross-reference every ticker here first. All sessions. All verdicts.</p><p class="mono" style="color:#555e6e; font-size:0.78rem;">Full brightness = post-Unified (Unified 7 Points) &nbsp;|&nbsp; Muted = pre-Unified (legacy standard)</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block" style="border-left:7px solid #2a7fff;"><h1 style="color:#2a7fff;">Master Consolidated Log</h1><p class="mono" style="color:#8899aa;">Cross-reference every ticker here first. All sessions. All verdicts.</p><p class="mono" style="color:#555e6e; font-size:0.78rem;">Full brightness = post-Unified (Unified 7 Points) &nbsp;|&nbsp; Muted = pre-Unified (legacy standard)</p></div>', unsafe_allow_html=True)
     col_filter, col_search = st.columns([2, 3])
     with col_filter:
         verdict_filter = st.selectbox("Filter by Verdict", ["ALL", "BUY", "HOLD", "PASS", "HARD_PASS"])
@@ -571,7 +571,7 @@ elif page == "Master Log":
                 unsafe_allow_html=True)
 
 elif page == "Ticker Lookup":
-    st.markdown('<div class="header-block"><h1 style="color:#2a7fff;">Ticker Cross-Reference</h1><p class="mono" style="color:#8899aa;">Check Master Consolidated Log instantly before any analysis.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block" style="border-left:7px solid #2a7fff;"><h1 style="color:#2a7fff;">Ticker Cross-Reference</h1><p class="mono" style="color:#8899aa;">Check Master Consolidated Log instantly before any analysis.</p></div>', unsafe_allow_html=True)
     ticker_input = st.text_input("Enter Ticker Symbol", placeholder="e.g. CRWD, NKE, MSFT").upper().strip()
     if ticker_input:
         result = lookup_ticker(ticker_input)
@@ -608,7 +608,7 @@ elif page == "Ticker Lookup":
                 unsafe_allow_html=True)
 
 elif page == "Add / Update":
-    st.markdown('<div class="header-block"><h1 style="color:#2a7fff;">Add / Update Ticker</h1><p class="mono" style="color:#8899aa;">HANDOFF line — auto-logs to correct table with Capital Efficiency Score.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block" style="border-left:7px solid #2a7fff;"><h1 style="color:#2a7fff;">Add / Update Ticker</h1><p class="mono" style="color:#8899aa;">HANDOFF line — auto-logs to correct table with Capital Efficiency Score.</p></div>', unsafe_allow_html=True)
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["Add to Buy List", "Add to Hold List", "Log PASS / HARD PASS", "Re-evaluate / Update Verdict", "Remove Ticker"])
 
     with tab1:
@@ -752,8 +752,8 @@ elif page == "Add / Update":
 
 elif page == "Market Data Updates":
     st.markdown(
-        '<div class="header-block">' 
-        '<h1>Market Data Updates</h1>'
+        '<div class="header-block" style="border-left:7px solid #2a7fff;">' 
+        '<h1 style="color:#2a7fff;">Market Data Updates</h1>'
         '<p class="mono" style="color:#8899aa; font-size:0.72rem;">Refreshes prices, recalculates CE Scores, checks Hard Trigger Flags.</p>'
         '</div>', unsafe_allow_html=True)
     if not YFINANCE_AVAILABLE:
