@@ -458,18 +458,15 @@ if page == "Dashboard":
         for _, row in buy_df.iterrows():
             nm = " <- NEW" if row["is_new"] else ""
             st.markdown(
-                f'<div class="metric-card" style="border-left:7px solid #3ddc84; padding:0.8rem 1rem;">'
-                f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">'
+                f'<div class="metric-card" style="border-left:7px solid #3ddc84; padding:0.7rem 1rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
-                f'<span style="color:#3ddc84;">{nm}</span>'
-                f'<span class="mono" style="color:#e8e4d9; margin-left:0.5rem;">${row["current_price"]:.2f}</span>'
-                f'</div>'
-                f'<div style="display:flex; gap:1.5rem; flex-wrap:wrap;">'
-                f'<span class="mono" style="color:#3ddc84;">Mid Upside: {row["mid_upside"]:.1f}%</span>'
-                f'<span class="mono" style="color:#3ddc84;">Mid Target: ${row["mid_fair_target"]:.2f}</span>'
-                f'<span class="mono" style="color:#ffc947;">Score: <em>{row["capital_efficiency_score"]:.2f}</em></span>'
-                f'</div>'
-                f'</div>',
+                f'<span style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.78rem;">{nm}</span>'
+                f'&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
+                f'<span style="float:right;" class="mono" style="font-size:0.78rem;">'
+                f'<span style="color:#3ddc84; font-size:0.78rem;">Upside: {row["mid_upside"]:.1f}%</span>'
+                f'&nbsp;<span style="color:#3ddc84; font-size:0.78rem;">Target: ${row["mid_fair_target"]:.2f}</span>'
+                f'&nbsp;Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
+                f'</span></div>',
                 unsafe_allow_html=True)
     with col_h:
         st.markdown("#### :orange[Hold List — Ranked by Efficiency]")
@@ -477,19 +474,15 @@ if page == "Dashboard":
         for _, row in hold_df.iterrows():
             nm = " <- NEW" if row["is_new"] else ""
             st.markdown(
-                f'<div class="metric-card" style="border-left:7px solid #ffc947; padding:0.8rem 1rem;">'
-                f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">'
+                f'<div class="metric-card" style="border-left:7px solid #ffc947; padding:0.7rem 1rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
-                f'<span style="color:#ffc947;">{nm}</span>'
-                f'<span class="mono" style="color:#e8e4d9; margin-left:0.5rem;">${row["current_price"]:.2f}</span>'
-                f'</div>'
-                f'<div style="display:flex; gap:1.5rem; flex-wrap:wrap;">'
-                f'<span class="mono" style="color:#ffc947;">Mid Upside: {row["mid_upside"]:.1f}%</span>'
-                f'<span class="mono" style="color:#ffc947;">Mid Entry: ${row["mid_fair_entry"]:.2f}</span>'
-                f'<span class="mono" style="color:#ffc947;">Mid Target: ${row["mid_fair_target"]:.2f}</span>'
-                f'<span class="mono" style="color:#ffc947;">Score: <em>{row["capital_efficiency_score"]:.2f}</em></span>'
-                f'</div>'
-                f'</div>',
+                f'<span style="color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.78rem;">{nm}</span>'
+                f'&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
+                f'<span style="float:right;" class="mono" style="font-size:0.78rem;">'
+                f'<span style="color:#ffc947; font-size:0.78rem;">Entry: ${row["mid_fair_entry"]:.2f}</span>'
+                f'&nbsp;<span style="color:#ffc947; font-size:0.78rem;">Target: ${row["mid_fair_target"]:.2f}</span>'
+                f'&nbsp;Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
+                f'</span></div>',
                 unsafe_allow_html=True)
 
 elif page == "Buy List":
