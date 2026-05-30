@@ -45,7 +45,7 @@ div[data-testid="stSidebarContent"] { background-color: #0a0c10; border-right: 1
 def dash_card(color, label, value, sub):
     return (
         f'<div class="metric-card" style="border-left: 7px solid {color};">'
-        f'<p class="mono" style="color:#8899aa; margin:0; font-size:0.75rem;">{label}</p>'
+        f'<p class="mono" style="color:#e8e4d9; margin:0; font-size:0.75rem;">{label}</p>'
         f'<h2 style="color:{color}; margin:0; font-family:JetBrains Mono,monospace;">{value}</h2>'
         f'<p class="mono" style="color:#555e6e; margin:0; font-size:0.75rem;">{sub}</p>'
         f'</div>'
@@ -461,11 +461,11 @@ if page == "Dashboard":
                 f'<div class="metric-card" style="border-left:7px solid #3ddc84; padding:0.7rem 1rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
                 f'<span style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.78rem;">{nm}</span>'
-                f'&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
-                f'<span style="float:right;" class="mono" style="font-size:0.78rem;">'
-                f'<span style="color:#3ddc84; font-size:0.78rem;">Upside: {row["mid_upside"]:.1f}%</span>'
-                f'&nbsp;<span style="color:#3ddc84; font-size:0.78rem;">Target: ${row["mid_fair_target"]:.2f}</span>'
-                f'&nbsp;Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
+                f'&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
+                f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.78rem;">'
+                f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#3ddc84;">{row["mid_upside"]:.1f}%</span>'
+                f'&nbsp;&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#3ddc84;">${row["mid_fair_target"]:.2f}</span>'
+                f'&nbsp;&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#3ddc84;">{row["capital_efficiency_score"]:.2f}</em>'
                 f'</span></div>',
                 unsafe_allow_html=True)
     with col_h:
@@ -477,16 +477,17 @@ if page == "Dashboard":
                 f'<div class="metric-card" style="border-left:7px solid #ffc947; padding:0.7rem 1rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
                 f'<span style="color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.78rem;">{nm}</span>'
-                f'&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
-                f'<span style="float:right;" class="mono" style="font-size:0.78rem;">'
-                f'<span style="color:#ffc947; font-size:0.78rem;">Entry: ${row["mid_fair_entry"]:.2f}</span>'
-                f'&nbsp;<span style="color:#ffc947; font-size:0.78rem;">Target: ${row["mid_fair_target"]:.2f}</span>'
-                f'&nbsp;Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
+                f'&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
+                f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.78rem;">'
+                f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#ffc947;">{row["mid_upside"]:.1f}%</span>'
+                f'&nbsp;&nbsp;<span style="color:#e8e4d9;">Entry: </span><span style="color:#ffc947;">${row["mid_fair_entry"]:.2f}</span>'
+                f'&nbsp;&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#ffc947;">${row["mid_fair_target"]:.2f}</span>'
+                f'&nbsp;&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
                 f'</span></div>',
                 unsafe_allow_html=True)
 
 elif page == "Buy List":
-    st.markdown('<div class="header-block"><h1 style="color:#3ddc84;">Buy List</h1><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Current Price)</p></div>', unsafe_allow_html=True)
+    st.markdown('<div style="border-left:7px solid #3ddc84; padding-left:1rem; margin-bottom:1.5rem;"><h1 style="color:#3ddc84;"><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Current Price)</p></div>', unsafe_allow_html=True)
     buy_df = get_buy_list()
     if buy_df.empty:
         st.info("No tickers in Buy List.")
@@ -515,7 +516,7 @@ elif page == "Buy List":
         st.dataframe(export_df, use_container_width=True, hide_index=True)
 
 elif page == "Hold List":
-    st.markdown('<div class="header-block"><h1 style="color:#ffc947;">Hold List</h1><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Mid Fair Entry)</p></div>', unsafe_allow_html=True)
+    st.markdown('<div style="border-left:7px solid #ffc947; padding-left:1rem; margin-bottom:1.5rem;"><h1 style="color:#ffc947;"><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Mid Fair Entry)</p></div>', unsafe_allow_html=True)
     hold_df = get_hold_list()
     if hold_df.empty:
         st.info("No tickers in Hold List.")
