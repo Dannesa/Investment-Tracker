@@ -437,7 +437,7 @@ with st.sidebar:
     st.markdown('<p class="mono" style="color:#e8e4d9; font-size:0.72rem; font-weight:600;">We are not desperate. We wait. 🐟</p>', unsafe_allow_html=True)
 
 if page == "Dashboard":
-    st.markdown('<div class="header-block"><h1 style="color:#2a7fff;">Investment Analysis System</h1><p class="mono" style="color:#8899aa;">Unified 7 Points Standards | V55 | Dream Team</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block" style="border-left:7px solid #2a7fff;"><h1 style="color:#2a7fff;">Investment Analysis System</h1><p class="mono" style="color:#8899aa;">Unified 7 Points Standards | V55 | Dream Team</p></div>', unsafe_allow_html=True)
     col1, col2, col3, col4 = st.columns(4)
     log_df = get_master_log()
     with col1:
