@@ -102,12 +102,22 @@ def init_db():
     # Schema — single midpoint values
     c.execute("""CREATE TABLE IF NOT EXISTS buy_list (
         ticker TEXT PRIMARY KEY, current_price REAL, mid_upside REAL,
-        capital_efficiency_score REAL, institutional_money TEXT DEFAULT 'Pending',
+        mid_fair_target REAL DEFAULT 0, capital_efficiency_score REAL,
+        institutional_money TEXT DEFAULT 'Pending',
         date_added TEXT, is_new INTEGER DEFAULT 0, notes TEXT DEFAULT '')""")
     c.execute("""CREATE TABLE IF NOT EXISTS hold_list (
         ticker TEXT PRIMARY KEY, current_price REAL, mid_upside REAL,
-        mid_fair_entry REAL, capital_efficiency_score REAL,
+        mid_fair_entry REAL, mid_fair_target REAL DEFAULT 0,
+        capital_efficiency_score REAL,
         date_added TEXT, is_new INTEGER DEFAULT 0, notes TEXT DEFAULT '')""")
+    try:
+        c.execute("ALTER TABLE buy_list ADD COLUMN mid_fair_target REAL DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE hold_list ADD COLUMN mid_fair_target REAL DEFAULT 0")
+    except Exception:
+        pass
     c.execute("""CREATE TABLE IF NOT EXISTS master_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL,
         date_analyzed TEXT, verdict TEXT, notes TEXT DEFAULT '',
@@ -138,38 +148,39 @@ def seed_v55():
     c = conn.cursor()
     # Buy list — single mid_upside
     buy_data = [
-        ("GTLB", 25.98, 50.0, "Pending", "May 11, 2026", 0),
-        ("NKE",  44.14, 60.0, "Pending", "May 11, 2026", 1),
-        ("CRM",  181.82, 52.5, "Pending", "May 11, 2026", 0),
-        ("ADBE", 247.36, 60.0, "Pending", "May 11, 2026", 0),
+        ("GTLB", 25.98, 50.0, 39.0,  "Pending", "May 11, 2026", 0),
+        ("NKE",  44.14, 60.0, 70.6,  "Pending", "May 11, 2026", 1),
+        ("CRM",  181.82, 52.5, 277.3, "Pending", "May 11, 2026", 0),
+        ("ADBE", 247.36, 60.0, 395.8, "Pending", "May 11, 2026", 0),
     ]
-    for ticker, price, mid_up, inst, dt, is_new in buy_data:
+    for ticker, price, mid_up, mid_ft, inst, dt, is_new in buy_data:
         score = round(mid_up / price, 2)
         c.execute("""INSERT OR IGNORE INTO buy_list
-            (ticker, current_price, mid_upside, capital_efficiency_score,
-             institutional_money, date_added, is_new) VALUES (?,?,?,?,?,?,?)""",
-            (ticker, price, mid_up, score, inst, dt, is_new))
+            (ticker, current_price, mid_upside, mid_fair_target,
+             capital_efficiency_score, institutional_money, date_added, is_new)
+             VALUES (?,?,?,?,?,?,?,?)""",
+            (ticker, price, mid_up, mid_ft, score, inst, dt, is_new))
     # Hold list — single mid_upside + mid_fair_entry
     hold_data = [
-        ("GFI",   44.86, 40.0, 30.5,  "May 11, 2026", 0),
-        ("HALO",  66.41, 50.0, 55.0,  "May 11, 2026", 0),
-        ("TW",   108.81, 50.0, 87.5,  "May 11, 2026", 0),
-        ("NOW",   92.50, 42.5, 76.0,  "May 11, 2026", 0),
-        ("NEM",  120.67, 52.5, 96.5,  "May 11, 2026", 0),
-        ("NDAQ",  88.48, 52.5, 80.5,  "May 12, 2026", 0),
-        ("SNOW", 154.06, 37.5, 110.0, "May 11, 2026", 0),
-        ("AMZN", 271.82, 32.5, 202.5, "May 11, 2026", 0),
-        ("INTU", 397.54, 37.5, 330.0, "May 11, 2026", 0),
-        ("EQIX",1073.23, 37.5, 740.0, "May 12, 2026", 0),
-        ("AME",  231.61, 42.5, 165.0, "May 12, 2026", 0),
-        ("CRWD", 548.02, 42.5, 335.0, "May 12, 2026", 1),
+        ("GFI",   44.86, 40.0, 30.5,  45.7,   "May 11, 2026", 0),
+        ("HALO",  66.41, 50.0, 55.0,  82.5,   "May 11, 2026", 0),
+        ("TW",   108.81, 50.0, 87.5,  163.2,  "May 11, 2026", 0),
+        ("NOW",   92.50, 42.5, 76.0,  131.8,  "May 11, 2026", 0),
+        ("NEM",  120.67, 52.5, 96.5,  184.0,  "May 11, 2026", 0),
+        ("NDAQ",  88.48, 52.5, 80.5,  135.0,  "May 12, 2026", 0),
+        ("SNOW", 154.06, 37.5, 110.0, 211.8,  "May 11, 2026", 0),
+        ("AMZN", 271.82, 32.5, 202.5, 360.2,  "May 11, 2026", 0),
+        ("INTU", 397.54, 37.5, 330.0, 546.6,  "May 11, 2026", 0),
+        ("EQIX",1073.23, 37.5, 740.0, 1475.7, "May 12, 2026", 0),
+        ("AME",  231.61, 42.5, 165.0, 330.0,  "May 12, 2026", 0),
+        ("CRWD", 548.02, 42.5, 335.0, 781.4,  "May 12, 2026", 1),
     ]
-    for ticker, price, mid_up, mid_fe, dt, is_new in hold_data:
+    for ticker, price, mid_up, mid_fe, mid_ft, dt, is_new in hold_data:
         score = round(mid_up / mid_fe, 2)
         c.execute("""INSERT OR IGNORE INTO hold_list
-            (ticker, current_price, mid_upside, mid_fair_entry,
-             capital_efficiency_score, date_added, is_new) VALUES (?,?,?,?,?,?,?)""",
-            (ticker, price, mid_up, mid_fe, score, dt, is_new))
+            (ticker, current_price, mid_upside, mid_fair_entry, mid_fair_target,
+             capital_efficiency_score, date_added, is_new) VALUES (?,?,?,?,?,?,?,?)""",
+            (ticker, price, mid_up, mid_fe, mid_ft, score, dt, is_new))
     # Master log — BUY
     for ticker, dt in [("GTLB","May 4, 2026"),("ADBE","May 4, 2026"),("NKE","May 4, 2026"),("CRM","May 4, 2026")]:
         c.execute("INSERT OR IGNORE INTO master_log (ticker,date_analyzed,verdict,is_unified) VALUES (?,?,'BUY',1)", (ticker, dt))
@@ -282,42 +293,44 @@ def add_master_log(ticker, date_str, verdict, notes="", is_unified=1):
     conn.commit()
     conn.close()
 
-def add_or_update_buy(ticker, price, mid_up, inst, date_str, notes):
+def add_or_update_buy(ticker, price, mid_up, mid_ft, inst, date_str, notes):
     ticker = ticker.upper().strip()
     score = round(mid_up / price, 2) if price > 0 else 0
     conn = get_conn()
     c = conn.cursor()
     c.execute("UPDATE buy_list SET is_new=0")
     c.execute("""INSERT INTO buy_list
-        (ticker, current_price, mid_upside, capital_efficiency_score,
+        (ticker, current_price, mid_upside, mid_fair_target, capital_efficiency_score,
          institutional_money, date_added, is_new, notes)
-        VALUES (?,?,?,?,?,?,1,?)
+        VALUES (?,?,?,?,?,?,?,1,?)
         ON CONFLICT(ticker) DO UPDATE SET
             current_price=excluded.current_price, mid_upside=excluded.mid_upside,
+            mid_fair_target=excluded.mid_fair_target,
             capital_efficiency_score=excluded.capital_efficiency_score,
             institutional_money=excluded.institutional_money, date_added=excluded.date_added,
             is_new=1, notes=excluded.notes""",
-        (ticker, price, mid_up, score, inst, date_str, notes))
+        (ticker, price, mid_up, mid_ft, score, inst, date_str, notes))
     conn.commit()
     conn.close()
     add_master_log(ticker, date_str, "BUY", notes, is_unified=1)
 
-def add_or_update_hold(ticker, price, mid_up, mid_fe, date_str, notes):
+def add_or_update_hold(ticker, price, mid_up, mid_fe, mid_ft, date_str, notes):
     ticker = ticker.upper().strip()
     score = round(mid_up / mid_fe, 2) if mid_fe > 0 else 0
     conn = get_conn()
     c = conn.cursor()
     c.execute("UPDATE hold_list SET is_new=0")
     c.execute("""INSERT INTO hold_list
-        (ticker, current_price, mid_upside, mid_fair_entry,
+        (ticker, current_price, mid_upside, mid_fair_entry, mid_fair_target,
          capital_efficiency_score, date_added, is_new, notes)
-        VALUES (?,?,?,?,?,?,1,?)
+        VALUES (?,?,?,?,?,?,?,1,?)
         ON CONFLICT(ticker) DO UPDATE SET
             current_price=excluded.current_price, mid_upside=excluded.mid_upside,
             mid_fair_entry=excluded.mid_fair_entry,
+            mid_fair_target=excluded.mid_fair_target,
             capital_efficiency_score=excluded.capital_efficiency_score,
             date_added=excluded.date_added, is_new=1, notes=excluded.notes""",
-        (ticker, price, mid_up, mid_fe, score, date_str, notes))
+        (ticker, price, mid_up, mid_fe, mid_ft, score, date_str, notes))
     conn.commit()
     conn.close()
     add_master_log(ticker, date_str, "HOLD", notes, is_unified=1)
@@ -424,7 +437,7 @@ with st.sidebar:
     st.markdown('<p class="mono" style="color:#e8e4d9; font-size:0.72rem; font-weight:600;">We are not desperate. We wait. 🐟</p>', unsafe_allow_html=True)
 
 if page == "Dashboard":
-    st.markdown('<div class="header-block"><h1>Investment Analysis System</h1><p class="mono" style="color:#8899aa;">Unified 7 Points Standards | V55 | Dream Team</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block"><h1 style="color:#2a7fff;">Investment Analysis System</h1><p class="mono" style="color:#8899aa;">Unified 7 Points Standards | V55 | Dream Team</p></div>', unsafe_allow_html=True)
     col1, col2, col3, col4 = st.columns(4)
     log_df = get_master_log()
     with col1:
@@ -440,7 +453,7 @@ if page == "Dashboard":
     st.markdown("<hr style='border-top:1px solid #2a3344; margin:1.5rem 0;'>", unsafe_allow_html=True)
     col_b, col_h = st.columns(2)
     with col_b:
-        st.markdown("#### Buy List — Ranked by Efficiency")
+        st.markdown("#### :green[Buy List — Ranked by Efficiency]")
         buy_df = get_buy_list()
         for _, row in buy_df.iterrows():
             nm = " <- NEW" if row["is_new"] else ""
@@ -451,11 +464,12 @@ if page == "Dashboard":
                 f'<span class="mono" style="color:#e8e4d9;">${row["current_price"]:.2f}</span>'
                 f'<span style="float:right;" class="mono">'
                 f'<span style="color:#3ddc84;">Mid Upside: {row["mid_upside"]:.1f}%</span>'
+                f'&nbsp; Mid Target: <span style="color:#3ddc84;">${row["mid_fair_target"]:.2f}</span>'
                 f'&nbsp; Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
                 f'</span></div>',
                 unsafe_allow_html=True)
     with col_h:
-        st.markdown("#### Hold List — Ranked by Efficiency")
+        st.markdown("#### :orange[Hold List — Ranked by Efficiency]")
         hold_df = get_hold_list()
         for _, row in hold_df.iterrows():
             nm = " <- NEW" if row["is_new"] else ""
@@ -467,12 +481,13 @@ if page == "Dashboard":
                 f'<span style="float:right;" class="mono">'
                 f'<span style="color:#ffc947;">Mid Upside: {row["mid_upside"]:.1f}%</span>'
                 f'&nbsp; Mid Entry: <span style="color:#ffc947;">${row["mid_fair_entry"]:.2f}</span>'
+                f'&nbsp; Mid Target: <span style="color:#ffc947;">${row["mid_fair_target"]:.2f}</span>'
                 f'&nbsp; Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
                 f'</span></div>',
                 unsafe_allow_html=True)
 
 elif page == "Buy List":
-    st.markdown('<div class="header-block"><h1>Buy List</h1><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Current Price)</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block"><h1 style="color:#3ddc84;">Buy List</h1><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Current Price)</p></div>', unsafe_allow_html=True)
     buy_df = get_buy_list()
     if buy_df.empty:
         st.info("No tickers in Buy List.")
@@ -489,18 +504,19 @@ elif page == "Buy List":
                 f'<div style="margin-top:0.6rem; display:flex; gap:2rem; flex-wrap:wrap;">'
                 f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">CURRENT PRICE</p><p class="mono" style="color:#e8e4d9; margin:0;">${row["current_price"]:.2f}</p></div>'
                 f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">MID UPSIDE</p><p class="mono" style="color:#3ddc84; margin:0;">{row["mid_upside"]:.1f}%</p></div>'
+                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">MID FAIR TARGET</p><p class="mono" style="color:#3ddc84; margin:0;">${row["mid_fair_target"]:.2f}</p></div>'
                 f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">CE SCORE</p><p class="mono" style="color:#ffc947; margin:0; font-style:italic;">{row["capital_efficiency_score"]:.2f}</p></div>'
                 f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">INSTITUTIONAL $</p><p class="mono" style="color:#e8e4d9; margin:0;">{row["institutional_money"]}</p></div>'
                 f'</div></div>',
                 unsafe_allow_html=True)
         st.markdown(f'<p class="mono" style="color:#3ddc84;">Total: {len(buy_df)} tickers | Hard Trigger Flags: All Clear</p>', unsafe_allow_html=True)
         st.markdown("---")
-        export_df = buy_df[["ticker","current_price","mid_upside","capital_efficiency_score","institutional_money","date_added"]].copy()
-        export_df.columns = ["Ticker","Price","Mid Upside %","CE Score","Institutional $","Date"]
+        export_df = buy_df[["ticker","current_price","mid_upside","mid_fair_target","capital_efficiency_score","institutional_money","date_added"]].copy()
+        export_df.columns = ["Ticker","Price","Mid Upside %","Mid Fair Target","CE Score","Institutional $","Date"]
         st.dataframe(export_df, use_container_width=True, hide_index=True)
 
 elif page == "Hold List":
-    st.markdown('<div class="header-block"><h1>Hold List</h1><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Mid Fair Entry)</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block"><h1 style="color:#ffc947;">Hold List</h1><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Mid Fair Entry)</p></div>', unsafe_allow_html=True)
     hold_df = get_hold_list()
     if hold_df.empty:
         st.info("No tickers in Hold List.")
@@ -517,18 +533,19 @@ elif page == "Hold List":
                 f'<div style="margin-top:0.6rem; display:flex; gap:2rem; flex-wrap:wrap;">'
                 f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">CURRENT PRICE</p><p class="mono" style="color:#e8e4d9; margin:0;">${row["current_price"]:.2f}</p></div>'
                 f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">MID UPSIDE</p><p class="mono" style="color:#ffc947; margin:0;">{row["mid_upside"]:.1f}%</p></div>'
-                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">MID FAIR ENTRY</p><p class="mono" style="color:#ffc947; margin:0;">${row["mid_fair_entry"]:.0f}</p></div>'
+                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">MID FAIR ENTRY</p><p class="mono" style="color:#ffc947; margin:0;">${row["mid_fair_entry"]:.2f}</p></div>'
+                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">MID FAIR TARGET</p><p class="mono" style="color:#ffc947; margin:0;">${row["mid_fair_target"]:.2f}</p></div>'
                 f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">CE SCORE</p><p class="mono" style="color:#ffc947; margin:0; font-style:italic;">{row["capital_efficiency_score"]:.2f}</p></div>'
                 f'</div></div>',
                 unsafe_allow_html=True)
         st.markdown(f'<p class="mono" style="color:#ffc947;">Total: {len(hold_df)} tickers | Hard Trigger Flags: All Clear</p>', unsafe_allow_html=True)
         st.markdown("---")
-        export_df = hold_df[["ticker","current_price","mid_upside","mid_fair_entry","capital_efficiency_score","date_added"]].copy()
-        export_df.columns = ["Ticker","Price","Mid Upside %","Mid Fair Entry $","CE Score","Date"]
+        export_df = hold_df[["ticker","current_price","mid_upside","mid_fair_entry","mid_fair_target","capital_efficiency_score","date_added"]].copy()
+        export_df.columns = ["Ticker","Price","Mid Upside %","Mid Fair Entry","Mid Fair Target","CE Score","Date"]
         st.dataframe(export_df, use_container_width=True, hide_index=True)
 
 elif page == "Master Log":
-    st.markdown('<div class="header-block"><h1>Master Consolidated Log</h1><p class="mono" style="color:#8899aa;">Cross-reference every ticker here first. All sessions. All verdicts.</p><p class="mono" style="color:#555e6e; font-size:0.78rem;">Full brightness = post-Unified (Unified 7 Points) &nbsp;|&nbsp; Muted = pre-Unified (legacy standard)</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block"><h1 style="color:#2a7fff;">Master Consolidated Log</h1><p class="mono" style="color:#8899aa;">Cross-reference every ticker here first. All sessions. All verdicts.</p><p class="mono" style="color:#555e6e; font-size:0.78rem;">Full brightness = post-Unified (Unified 7 Points) &nbsp;|&nbsp; Muted = pre-Unified (legacy standard)</p></div>', unsafe_allow_html=True)
     col_filter, col_search = st.columns([2, 3])
     with col_filter:
         verdict_filter = st.selectbox("Filter by Verdict", ["ALL", "BUY", "HOLD", "PASS", "HARD_PASS"])
@@ -562,7 +579,7 @@ elif page == "Master Log":
                 unsafe_allow_html=True)
 
 elif page == "Ticker Lookup":
-    st.markdown('<div class="header-block"><h1>Ticker Cross-Reference</h1><p class="mono" style="color:#8899aa;">Check Master Consolidated Log instantly before any analysis.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block"><h1 style="color:#2a7fff;">Ticker Cross-Reference</h1><p class="mono" style="color:#8899aa;">Check Master Consolidated Log instantly before any analysis.</p></div>', unsafe_allow_html=True)
     ticker_input = st.text_input("Enter Ticker Symbol", placeholder="e.g. CRWD, NKE, MSFT").upper().strip()
     if ticker_input:
         result = lookup_ticker(ticker_input)
@@ -599,7 +616,7 @@ elif page == "Ticker Lookup":
                 unsafe_allow_html=True)
 
 elif page == "Add / Update":
-    st.markdown('<div class="header-block"><h1>Add / Update Ticker</h1><p class="mono" style="color:#8899aa;">HANDOFF line — auto-logs to correct table with Capital Efficiency Score.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block"><h1 style="color:#2a7fff;">Add / Update Ticker</h1><p class="mono" style="color:#8899aa;">HANDOFF line — auto-logs to correct table with Capital Efficiency Score.</p></div>', unsafe_allow_html=True)
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["Add to Buy List", "Add to Hold List", "Log PASS / HARD PASS", "Re-evaluate / Update Verdict", "Remove Ticker"])
 
     with tab1:
@@ -609,8 +626,9 @@ elif page == "Add / Update":
             with col1:
                 b_ticker = st.text_input("Ticker Symbol *").upper().strip()
                 b_price  = st.number_input("Current Price ($) *", min_value=0.01, value=100.00, step=0.01)
-            with col2:
                 b_mid_up = st.number_input("Mid Upside (%)", min_value=0.0, value=50.0, step=0.5)
+            with col2:
+                b_mid_ft = st.number_input("Mid Fair Target ($) *", min_value=0.01, value=150.00, step=0.01)
             b_inst  = st.selectbox("Institutional Money / Tape Reading",
                 ["Pending", "Strong absorption / aggressive buying",
                  "Neutral / choppy flow", "Distribution / selling pressure"])
@@ -622,9 +640,9 @@ elif page == "Add / Update":
                 elif b_price <= 0:
                     st.error("Price must be greater than 0.")
                 else:
-                    add_or_update_buy(b_ticker, b_price, b_mid_up, b_inst, b_date, b_notes)
+                    add_or_update_buy(b_ticker, b_price, b_mid_up, b_mid_ft, b_inst, b_date, b_notes)
                     score = round(b_mid_up / b_price, 2)
-                    st.success(f"{b_ticker} added to Buy List — CE Score: {score:.2f}")
+                    st.success(f"{b_ticker} added to Buy List — CE Score: {score:.2f} — Mid Fair Target: ${b_mid_ft:.2f}")
 
     with tab2:
         st.markdown("#### Add / Update — Hold List")
@@ -636,15 +654,16 @@ elif page == "Add / Update":
                 h_mid_up = st.number_input("Mid Upside (%)", min_value=0.0, value=40.0, step=0.5)
             with col2:
                 h_mid_fe = st.number_input("Mid Fair Entry ($) *", min_value=0.01, value=80.00, step=0.01)
+                h_mid_ft = st.number_input("Mid Fair Target ($) *", min_value=0.01, value=120.00, step=0.01)
             h_notes = st.text_area("Notes (optional)")
             h_date  = st.text_input("Date", value=date.today().strftime("%b %d, %Y"))
             if st.form_submit_button("Add to Hold List"):
                 if not h_ticker:
                     st.error("Ticker is required.")
                 else:
-                    add_or_update_hold(h_ticker, h_price, h_mid_up, h_mid_fe, h_date, h_notes)
+                    add_or_update_hold(h_ticker, h_price, h_mid_up, h_mid_fe, h_mid_ft, h_date, h_notes)
                     score = round(h_mid_up / h_mid_fe, 2)
-                    st.success(f"{h_ticker} added to Hold List — CE Score: {score:.2f} — Mid Fair Entry: ${h_mid_fe:.0f}")
+                    st.success(f"{h_ticker} added to Hold List — CE Score: {score:.2f} — Mid Fair Entry: ${h_mid_fe:.2f} — Mid Fair Target: ${h_mid_ft:.2f}")
 
     with tab3:
         st.markdown("#### Log PASS or HARD PASS")
@@ -674,6 +693,7 @@ elif page == "Add / Update":
             with col1:
                 re_price  = st.number_input("Current Price ($)", min_value=0.01, value=100.00, step=0.01)
                 re_mid_up = st.number_input("Mid Upside (%)", min_value=0.0, value=40.0, step=0.5)
+                re_mid_ft = st.number_input("Mid Fair Target ($)", min_value=0.01, value=150.00, step=0.01)
             with col2:
                 re_mid_fe = st.number_input("Mid Fair Entry ($) — Hold only", min_value=0.01, value=80.00, step=0.01)
                 re_inst   = st.selectbox("Institutional Money — Buy only",
@@ -684,13 +704,13 @@ elif page == "Add / Update":
                     st.error("Ticker is required.")
                 else:
                     if re_verdict == "BUY":
-                        add_or_update_buy(re_ticker, re_price, re_mid_up, re_inst, re_date, re_notes)
+                        add_or_update_buy(re_ticker, re_price, re_mid_up, re_mid_ft, re_inst, re_date, re_notes)
                         score = round(re_mid_up / re_price, 2)
-                        st.success(f"✅ {re_ticker} → BUY | Added to Buy List | CE Score: {score:.2f} | Master Log updated.")
+                        st.success(f"✅ {re_ticker} → BUY | Added to Buy List | CE Score: {score:.2f} | Mid Fair Target: ${re_mid_ft:.2f} | Master Log updated.")
                     elif re_verdict == "HOLD":
-                        add_or_update_hold(re_ticker, re_price, re_mid_up, re_mid_fe, re_date, re_notes)
+                        add_or_update_hold(re_ticker, re_price, re_mid_up, re_mid_fe, re_mid_ft, re_date, re_notes)
                         score = round(re_mid_up / re_mid_fe, 2)
-                        st.success(f"⚠️ {re_ticker} → HOLD | Added to Hold List | CE Score: {score:.2f} | Master Log updated.")
+                        st.success(f"⚠️ {re_ticker} → HOLD | Added to Hold List | CE Score: {score:.2f} | Mid Fair Target: ${re_mid_ft:.2f} | Master Log updated.")
                     elif re_verdict == "PASS":
                         add_master_log(re_ticker, re_date, "PASS", re_notes, is_unified=1)
                         st.success(f"❌ {re_ticker} → PASS | Master Log updated.")
@@ -760,7 +780,8 @@ elif page == "Market Data Updates":
                 f'<td style="{cell}">{r["ticker"]}</td>'
                 f'<td style="{cell}">${r["current_price"]:.2f}</td>'
                 f'<td style="{cell}">{r["mid_upside"]:.1f}%</td>'
-                f'<td style="{cell}">{r["capital_efficiency_score"]:.2f}</td>'
+                f'<td style="{cell}">${r["mid_fair_target"]:.2f}</td>'
+                f'<td style="{cell}"><em>{r["capital_efficiency_score"]:.2f}</em></td>'
                 f'<td style="{cell}">{r["date_added"]}</td>'
                 f'</tr>'
             )
@@ -771,6 +792,7 @@ elif page == "Market Data Updates":
             f'<th style="{hdr}">Ticker</th>'
             f'<th style="{hdr}">Price</th>'
             f'<th style="{hdr}">Mid Upside %</th>'
+            f'<th style="{hdr}">Mid Fair Target</th>'
             f'<th style="{hdr}">CE Score</th>'
             f'<th style="{hdr}">Date</th>'
             f'</tr></thead>'
@@ -789,7 +811,8 @@ elif page == "Market Data Updates":
                 f'<td style="{cell}">${r["current_price"]:.2f}</td>'
                 f'<td style="{cell}">{r["mid_upside"]:.1f}%</td>'
                 f'<td style="{cell}">${r["mid_fair_entry"]:.2f}</td>'
-                f'<td style="{cell}">{r["capital_efficiency_score"]:.2f}</td>'
+                f'<td style="{cell}">${r["mid_fair_target"]:.2f}</td>'
+                f'<td style="{cell}"><em>{r["capital_efficiency_score"]:.2f}</em></td>'
                 f'</tr>'
             )
         return (
@@ -800,6 +823,7 @@ elif page == "Market Data Updates":
             f'<th style="{hdr}">Price</th>'
             f'<th style="{hdr}">Mid Upside %</th>'
             f'<th style="{hdr}">Mid Fair Entry</th>'
+            f'<th style="{hdr}">Mid Fair Target</th>'
             f'<th style="{hdr}">CE Score</th>'
             f'</tr></thead>'
             f'<tbody>{rows}</tbody>'
