@@ -487,7 +487,7 @@ if page == "Dashboard":
                 unsafe_allow_html=True)
 
 elif page == "Buy List":
-    st.markdown('<div style="border-left:7px solid #3ddc84; padding-left:1rem; margin-bottom:1.5rem;"><h1 style="color:#3ddc84;"><p class="mono" style="color:#8899aa; font-size:0.85rem;">Ranked by Capital Efficiency Score (Mid Upside% / Current Price)</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block"><h1 style="color:#3ddc84;">Buy List</h1><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Current Price)</p></div>', unsafe_allow_html=True)
     buy_df = get_buy_list()
     if buy_df.empty:
         st.info("No tickers in Buy List.")
@@ -512,7 +512,7 @@ elif page == "Buy List":
         st.markdown(f'<p class="mono" style="color:#3ddc84;">Total: {len(buy_df)} tickers | Hard Trigger Flags: All Clear</p>', unsafe_allow_html=True)
 
 elif page == "Hold List":
-    st.markdown('<div style="border-left:7px solid #ffc947; padding-left:1rem; margin-bottom:1.5rem;"><h1 style="color:#ffc947;"><p class="mono" style="color:#8899aa; font-size:0.85rem;">Ranked by Capital Efficiency Score (Mid Upside% / Mid Fair Entry)</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block"><h1 style="color:#ffc947;">Hold List</h1><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Mid Fair Entry)</p></div>', unsafe_allow_html=True)
     hold_df = get_hold_list()
     if hold_df.empty:
         st.info("No tickers in Hold List.")
