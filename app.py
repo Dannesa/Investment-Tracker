@@ -458,15 +458,18 @@ if page == "Dashboard":
         for _, row in buy_df.iterrows():
             nm = " <- NEW" if row["is_new"] else ""
             st.markdown(
-                f'<div class="metric-card" style="border-left:3px solid #3ddc84; padding:0.8rem 1rem;">'
+                f'<div class="metric-card" style="border-left:7px solid #3ddc84; padding:0.8rem 1rem;">'
+                f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
-                f'<span style="color:#3ddc84;">{nm}</span> &nbsp;'
-                f'<span class="mono" style="color:#e8e4d9;">${row["current_price"]:.2f}</span>'
-                f'<span style="float:right;" class="mono">'
-                f'<span style="color:#3ddc84;">Mid Upside: {row["mid_upside"]:.1f}%</span>'
-                f'&nbsp; Mid Target: <span style="color:#3ddc84;">${row["mid_fair_target"]:.2f}</span>'
-                f'&nbsp; Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
-                f'</span></div>',
+                f'<span style="color:#3ddc84;">{nm}</span>'
+                f'<span class="mono" style="color:#e8e4d9; margin-left:0.5rem;">${row["current_price"]:.2f}</span>'
+                f'</div>'
+                f'<div style="display:flex; gap:1.5rem; flex-wrap:wrap;">'
+                f'<span class="mono" style="color:#3ddc84;">Mid Upside: {row["mid_upside"]:.1f}%</span>'
+                f'<span class="mono" style="color:#3ddc84;">Mid Target: ${row["mid_fair_target"]:.2f}</span>'
+                f'<span class="mono" style="color:#ffc947;">Score: <em>{row["capital_efficiency_score"]:.2f}</em></span>'
+                f'</div>'
+                f'</div>',
                 unsafe_allow_html=True)
     with col_h:
         st.markdown("#### :orange[Hold List — Ranked by Efficiency]")
@@ -474,16 +477,19 @@ if page == "Dashboard":
         for _, row in hold_df.iterrows():
             nm = " <- NEW" if row["is_new"] else ""
             st.markdown(
-                f'<div class="metric-card" style="border-left:3px solid #ffc947; padding:0.8rem 1rem;">'
+                f'<div class="metric-card" style="border-left:7px solid #ffc947; padding:0.8rem 1rem;">'
+                f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
-                f'<span style="color:#ffc947;">{nm}</span> &nbsp;'
-                f'<span class="mono" style="color:#e8e4d9;">${row["current_price"]:.2f}</span>'
-                f'<span style="float:right;" class="mono">'
-                f'<span style="color:#ffc947;">Mid Upside: {row["mid_upside"]:.1f}%</span>'
-                f'&nbsp; Mid Entry: <span style="color:#ffc947;">${row["mid_fair_entry"]:.2f}</span>'
-                f'&nbsp; Mid Target: <span style="color:#ffc947;">${row["mid_fair_target"]:.2f}</span>'
-                f'&nbsp; Score: <em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
-                f'</span></div>',
+                f'<span style="color:#ffc947;">{nm}</span>'
+                f'<span class="mono" style="color:#e8e4d9; margin-left:0.5rem;">${row["current_price"]:.2f}</span>'
+                f'</div>'
+                f'<div style="display:flex; gap:1.5rem; flex-wrap:wrap;">'
+                f'<span class="mono" style="color:#ffc947;">Mid Upside: {row["mid_upside"]:.1f}%</span>'
+                f'<span class="mono" style="color:#ffc947;">Mid Entry: ${row["mid_fair_entry"]:.2f}</span>'
+                f'<span class="mono" style="color:#ffc947;">Mid Target: ${row["mid_fair_target"]:.2f}</span>'
+                f'<span class="mono" style="color:#ffc947;">Score: <em>{row["capital_efficiency_score"]:.2f}</em></span>'
+                f'</div>'
+                f'</div>',
                 unsafe_allow_html=True)
 
 elif page == "Buy List":
@@ -495,7 +501,7 @@ elif page == "Buy List":
         for _, row in buy_df.iterrows():
             nm = " <- NEW" if row["is_new"] else ""
             st.markdown(
-                f'<div class="metric-card" style="border-left:3px solid #3ddc84;">'
+                f'<div class="metric-card" style="border-left:7px solid #3ddc84;">'
                 f'<div style="display:flex; justify-content:space-between;">'
                 f'<div><span style="font-family:JetBrains Mono,monospace; font-weight:700; font-size:1.15rem; color:#e8e4d9;">{row["ticker"]}</span>'
                 f'<span style="color:#3ddc84;">{nm}</span> &nbsp;<span class="mono" style="color:#3ddc84;">BUY</span></div>'
@@ -524,7 +530,7 @@ elif page == "Hold List":
         for _, row in hold_df.iterrows():
             nm = " <- NEW" if row["is_new"] else ""
             st.markdown(
-                f'<div class="metric-card" style="border-left:3px solid #ffc947;">'
+                f'<div class="metric-card" style="border-left:7px solid #ffc947;">'
                 f'<div style="display:flex; justify-content:space-between;">'
                 f'<div><span style="font-family:JetBrains Mono,monospace; font-weight:700; font-size:1.15rem; color:#e8e4d9;">{row["ticker"]}</span>'
                 f'<span style="color:#ffc947;">{nm}</span> &nbsp;<span class="mono" style="color:#ffc947;">HOLD</span></div>'
