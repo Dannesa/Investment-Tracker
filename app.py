@@ -462,10 +462,10 @@ if page == "Dashboard":
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
                 f'<span style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.78rem;">{nm}</span>'
                 f'&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
-                f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.78rem;">'
+                f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.72rem;">'
                 f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#3ddc84;">{row["mid_upside"]:.1f}%</span>'
-                f'&nbsp;&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#3ddc84;">${row["mid_fair_target"]:.2f}</span>'
-                f'&nbsp;&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#3ddc84;">{row["capital_efficiency_score"]:.2f}</em>'
+                f'&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#3ddc84;">${row["mid_fair_target"]:.2f}</span>'
+                f'&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#3ddc84;">{row["capital_efficiency_score"]:.2f}</em>'
                 f'</span></div>',
                 unsafe_allow_html=True)
     with col_h:
@@ -478,16 +478,16 @@ if page == "Dashboard":
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
                 f'<span style="color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.78rem;">{nm}</span>'
                 f'&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
-                f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.78rem;">'
+                f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.72rem;">'
                 f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#ffc947;">{row["mid_upside"]:.1f}%</span>'
-                f'&nbsp;&nbsp;<span style="color:#e8e4d9;">Entry: </span><span style="color:#ffc947;">${row["mid_fair_entry"]:.2f}</span>'
-                f'&nbsp;&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#ffc947;">${row["mid_fair_target"]:.2f}</span>'
-                f'&nbsp;&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
+                f'&nbsp;<span style="color:#e8e4d9;">Entry: </span><span style="color:#ffc947;">${row["mid_fair_entry"]:.2f}</span>'
+                f'&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#ffc947;">${row["mid_fair_target"]:.2f}</span>'
+                f'&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
                 f'</span></div>',
                 unsafe_allow_html=True)
 
 elif page == "Buy List":
-    st.markdown('<div style="border-left:7px solid #3ddc84; padding-left:1rem; margin-bottom:1.5rem;"><h1 style="color:#3ddc84;"><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Current Price)</p></div>', unsafe_allow_html=True)
+    st.markdown('<div style="border-left:7px solid #3ddc84; padding-left:1rem; margin-bottom:1.5rem;"><h1 style="color:#3ddc84;"><p class="mono" style="color:#8899aa; font-size:0.85rem;">Ranked by Capital Efficiency Score (Mid Upside% / Current Price)</p></div>', unsafe_allow_html=True)
     buy_df = get_buy_list()
     if buy_df.empty:
         st.info("No tickers in Buy List.")
@@ -510,13 +510,9 @@ elif page == "Buy List":
                 f'</div></div>',
                 unsafe_allow_html=True)
         st.markdown(f'<p class="mono" style="color:#3ddc84;">Total: {len(buy_df)} tickers | Hard Trigger Flags: All Clear</p>', unsafe_allow_html=True)
-        st.markdown("---")
-        export_df = buy_df[["ticker","current_price","mid_upside","mid_fair_target","capital_efficiency_score","institutional_money","date_added"]].copy()
-        export_df.columns = ["Ticker","Price","Mid Upside %","Mid Fair Target","CE Score","Institutional $","Date"]
-        st.dataframe(export_df, use_container_width=True, hide_index=True)
 
 elif page == "Hold List":
-    st.markdown('<div style="border-left:7px solid #ffc947; padding-left:1rem; margin-bottom:1.5rem;"><h1 style="color:#ffc947;"><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Mid Fair Entry)</p></div>', unsafe_allow_html=True)
+    st.markdown('<div style="border-left:7px solid #ffc947; padding-left:1rem; margin-bottom:1.5rem;"><h1 style="color:#ffc947;"><p class="mono" style="color:#8899aa; font-size:0.85rem;">Ranked by Capital Efficiency Score (Mid Upside% / Mid Fair Entry)</p></div>', unsafe_allow_html=True)
     hold_df = get_hold_list()
     if hold_df.empty:
         st.info("No tickers in Hold List.")
@@ -539,10 +535,6 @@ elif page == "Hold List":
                 f'</div></div>',
                 unsafe_allow_html=True)
         st.markdown(f'<p class="mono" style="color:#ffc947;">Total: {len(hold_df)} tickers | Hard Trigger Flags: All Clear</p>', unsafe_allow_html=True)
-        st.markdown("---")
-        export_df = hold_df[["ticker","current_price","mid_upside","mid_fair_entry","mid_fair_target","capital_efficiency_score","date_added"]].copy()
-        export_df.columns = ["Ticker","Price","Mid Upside %","Mid Fair Entry","Mid Fair Target","CE Score","Date"]
-        st.dataframe(export_df, use_container_width=True, hide_index=True)
 
 elif page == "Master Log":
     st.markdown('<div class="header-block"><h1 style="color:#2a7fff;">Master Consolidated Log</h1><p class="mono" style="color:#8899aa;">Cross-reference every ticker here first. All sessions. All verdicts.</p><p class="mono" style="color:#555e6e; font-size:0.78rem;">Full brightness = post-Unified (Unified 7 Points) &nbsp;|&nbsp; Muted = pre-Unified (legacy standard)</p></div>', unsafe_allow_html=True)
