@@ -459,14 +459,16 @@ if page == "Dashboard":
             nm = " <- NEW" if row["is_new"] else ""
             st.markdown(
                 f'<div class="metric-card" style="border-left:7px solid #3ddc84; padding:0.7rem 1rem;">'
+                f'<div style="margin-bottom:0.15rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
-                f'<span style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.78rem;">{nm}</span>'
+                f'{"&nbsp;<span style=\'color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.72rem;\'>← NEW</span>" if row["is_new"] else ""}'
                 f'&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
                 f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.72rem;">'
                 f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#3ddc84;">{row["mid_upside"]:.1f}%</span>'
                 f'&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#3ddc84;">${row["mid_fair_target"]:.2f}</span>'
                 f'&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#3ddc84;">{row["capital_efficiency_score"]:.2f}</em>'
-                f'</span></div>',
+                f'</span></div>'
+                f'</div>',
                 unsafe_allow_html=True)
     with col_h:
         st.markdown("#### :orange[Hold List — Ranked by Efficiency]")
@@ -475,15 +477,17 @@ if page == "Dashboard":
             nm = " <- NEW" if row["is_new"] else ""
             st.markdown(
                 f'<div class="metric-card" style="border-left:7px solid #ffc947; padding:0.7rem 1rem;">'
+                f'<div style="margin-bottom:0.15rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
-                f'<span style="color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.78rem;">{nm}</span>'
+                f'{"&nbsp;<span style=\'color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.72rem;\'>← NEW</span>" if row["is_new"] else ""}'
                 f'&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
                 f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.72rem;">'
                 f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#ffc947;">{row["mid_upside"]:.1f}%</span>'
                 f'&nbsp;<span style="color:#e8e4d9;">Entry: </span><span style="color:#ffc947;">${row["mid_fair_entry"]:.2f}</span>'
                 f'&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#ffc947;">${row["mid_fair_target"]:.2f}</span>'
                 f'&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
-                f'</span></div>',
+                f'</span></div>'
+                f'</div>',
                 unsafe_allow_html=True)
 
 elif page == "Buy List":
