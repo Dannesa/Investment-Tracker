@@ -349,12 +349,16 @@ def remove_from_hold(ticker):
     conn.commit()
     conn.close()
 
-def update_price_in_db(table, ticker, new_price, new_score):
+def update_price_in_db(table, ticker, new_price, new_score, new_mid_upside=None):
     conn = get_conn()
     c = conn.cursor()
     today = date.today().strftime("%b %d, %Y")
-    c.execute(f"UPDATE {table} SET current_price=?, capital_efficiency_score=?, date_added=? WHERE ticker=?",
-              (new_price, new_score, today, ticker))
+    if new_mid_upside is not None:
+        c.execute(f"UPDATE {table} SET current_price=?, capital_efficiency_score=?, mid_upside=?, date_added=? WHERE ticker=?",
+                  (new_price, new_score, new_mid_upside, today, ticker))
+    else:
+        c.execute(f"UPDATE {table} SET current_price=?, capital_efficiency_score=?, date_added=? WHERE ticker=?",
+                  (new_price, new_score, today, ticker))
     conn.commit()
     conn.close()
 
@@ -379,23 +383,83 @@ def run_market_data_update():
         return None, "yfinance not installed."
     prices = fetch_prices_yfinance(all_tickers)
     today = date.today().strftime("%b %d, %Y")
+
     updated_buy = []
+    auto_downgraded = []
+    auto_retired_buy = []
+
     for _, row in buy_df.iterrows():
         t = row["ticker"]
         new_price = prices.get(t)
-        if new_price:
-            new_score = round(row["mid_upside"] / new_price, 2)
-            update_price_in_db("buy_list", t, new_price, new_score)
-        updated_buy.append((t, row["current_price"], new_price))
+        if not new_price:
+            updated_buy.append((t, row["current_price"], None, row["mid_upside"], "unchanged"))
+            continue
+        mid_ft = row["mid_fair_target"]
+        new_mid_upside = round((mid_ft - new_price) / new_price * 100, 2) if new_price > 0 and mid_ft > 0 else row["mid_upside"]
+
+        if new_mid_upside >= 50.0:
+            new_score = round(new_mid_upside / new_price, 2)
+            update_price_in_db("buy_list", t, new_price, new_score, new_mid_upside)
+            updated_buy.append((t, row["current_price"], new_price, new_mid_upside, "active"))
+
+        elif new_mid_upside >= 35.0:
+            mid_fe_new = round(mid_ft / 1.5, 2)
+            remove_from_buy(t)
+            add_or_update_hold(t, new_price, new_mid_upside, mid_fe_new, mid_ft, today,
+                               f"Auto-downgraded from Buy List — Mid Upside compressed to {new_mid_upside:.1f}% — {today}")
+            auto_downgraded.append((t, row["current_price"], new_price, new_mid_upside, mid_fe_new))
+
+        else:
+            remove_from_buy(t)
+            add_master_log(t, today, "PASS", is_unified=1,
+                           notes=f"Auto-retired from Buy List — Mid Upside fell to {new_mid_upside:.1f}% (below 35% threshold) — {today}")
+            auto_retired_buy.append((t, row["current_price"], new_price, new_mid_upside))
+
     updated_hold = []
+    auto_upgraded = []
+    auto_retired_hold = []
+
     for _, row in hold_df.iterrows():
         t = row["ticker"]
         new_price = prices.get(t)
-        if new_price:
-            new_score = round(row["mid_upside"] / row["mid_fair_entry"], 2) if row["mid_fair_entry"] > 0 else row["capital_efficiency_score"]
-            update_price_in_db("hold_list", t, new_price, new_score)
-        updated_hold.append((t, row["current_price"], new_price))
-    return {"buy": updated_buy, "hold": updated_hold, "timestamp": today}, None
+        if not new_price:
+            updated_hold.append((t, row["current_price"], None, row["mid_upside"], "unchanged"))
+            continue
+        mid_ft = row["mid_fair_target"]
+        new_mid_upside = round((mid_ft - new_price) / new_price * 100, 2) if new_price > 0 and mid_ft > 0 else row["mid_upside"]
+
+        if new_mid_upside >= 50.0:
+            remove_from_hold(t)
+            add_or_update_buy(t, new_price, new_mid_upside, mid_ft, "Pending", today,
+                              f"Auto-upgraded from Hold List — Mid Upside reached {new_mid_upside:.1f}% — {today}")
+            auto_upgraded.append((t, row["current_price"], new_price, new_mid_upside))
+
+        elif new_mid_upside >= 35.0:
+            mid_fe_new = round(mid_ft / 1.5, 2)
+            new_score = round(new_mid_upside / mid_fe_new, 2) if mid_fe_new > 0 else 0
+            update_price_in_db("hold_list", t, new_price, new_score, new_mid_upside)
+            conn = get_conn()
+            c = conn.cursor()
+            c.execute("UPDATE hold_list SET mid_fair_entry=? WHERE ticker=?", (mid_fe_new, t))
+            conn.commit()
+            conn.close()
+            updated_hold.append((t, row["current_price"], new_price, new_mid_upside, "active"))
+
+        else:
+            remove_from_hold(t)
+            add_master_log(t, today, "PASS", is_unified=1,
+                           notes=f"Auto-retired from Hold List — Mid Upside fell to {new_mid_upside:.1f}% (below 35% threshold) — {today}")
+            auto_retired_hold.append((t, row["current_price"], new_price, new_mid_upside))
+
+    return {
+        "buy": updated_buy,
+        "hold": updated_hold,
+        "auto_downgraded": auto_downgraded,
+        "auto_upgraded": auto_upgraded,
+        "auto_retired_buy": auto_retired_buy,
+        "auto_retired_hold": auto_retired_hold,
+        "timestamp": today
+    }, None
 
 def check_hard_triggers(df_buy, df_hold):
     flags = []
@@ -461,11 +525,11 @@ if page == "Dashboard":
                 f'<div class="metric-card" style="border-left:7px solid #3ddc84; padding:0.7rem 1rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
                 f'&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
-                f'{"&nbsp;<span style=\'color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.68rem;\'>← NEW</span>" if row["is_new"] else ""}'
+                f'{"&nbsp;<span style=\'color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.68rem; font-style:italic;\'>← NEW</span>" if row["is_new"] else ""}'
                 f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.72rem;">'
                 f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#3ddc84;">{row["mid_upside"]:.1f}%</span>'
-                f'&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#3ddc84;">${row["mid_fair_target"]:.2f}</span>'
-                f'&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#3ddc84;">{row["capital_efficiency_score"]:.2f}</em>'
+                f'&nbsp;&nbsp;&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#3ddc84;">${row["mid_fair_target"]:.2f}</span>'
+                f'&nbsp;&nbsp;&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#3ddc84;">{row["capital_efficiency_score"]:.2f}</em>'
                 f'</span></div>',
                 unsafe_allow_html=True)
     with col_h:
@@ -477,12 +541,12 @@ if page == "Dashboard":
                 f'<div class="metric-card" style="border-left:7px solid #ffc947; padding:0.7rem 1rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
                 f'&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
-                f'{"&nbsp;<span style=\'color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.68rem;\'>← NEW</span>" if row["is_new"] else ""}'
+                f'{"&nbsp;<span style=\'color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.68rem; font-style:italic;\'>← NEW</span>" if row["is_new"] else ""}'
                 f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.72rem;">'
                 f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#ffc947;">{row["mid_upside"]:.1f}%</span>'
-                f'&nbsp;<span style="color:#e8e4d9;">Entry: </span><span style="color:#ffc947;">${row["mid_fair_entry"]:.2f}</span>'
-                f'&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#ffc947;">${row["mid_fair_target"]:.2f}</span>'
-                f'&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
+                f'&nbsp;&nbsp;&nbsp;<span style="color:#e8e4d9;">Entry: </span><span style="color:#ffc947;">${row["mid_fair_entry"]:.2f}</span>'
+                f'&nbsp;&nbsp;&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#ffc947;">${row["mid_fair_target"]:.2f}</span>'
+                f'&nbsp;&nbsp;&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
                 f'</span></div>',
                 unsafe_allow_html=True)
 
@@ -498,15 +562,15 @@ elif page == "Buy List":
                 f'<div class="metric-card" style="border-left:7px solid #3ddc84;">'
                 f'<div style="display:flex; justify-content:space-between;">'
                 f'<div><span style="font-family:JetBrains Mono,monospace; font-weight:700; font-size:1.15rem; color:#e8e4d9;">{row["ticker"]}</span>'
-                f'<span style="color:#3ddc84;">{nm}</span> &nbsp;<span class="mono" style="color:#3ddc84;">BUY</span></div>'
-                f'<div class="mono" style="color:#555e6e; font-size:0.78rem;">{row["date_added"]}</div>'
+                f'<span style="color:#3ddc84;">{"&nbsp;<em>← NEW</em>" if row["is_new"] else ""}</span> &nbsp;<span class="mono" style="color:#3ddc84;">BUY</span></div>'
+                f'<div class="mono" style="color:#e8e4d9; font-size:0.78rem;">{row["date_added"]}</div>'
                 f'</div>'
-                f'<div style="margin-top:0.6rem; display:flex; gap:2rem; flex-wrap:wrap;">'
-                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">CURRENT PRICE</p><p class="mono" style="color:#e8e4d9; margin:0;">${row["current_price"]:.2f}</p></div>'
-                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">MID UPSIDE</p><p class="mono" style="color:#3ddc84; margin:0;">{row["mid_upside"]:.1f}%</p></div>'
-                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">MID FAIR TARGET</p><p class="mono" style="color:#3ddc84; margin:0;">${row["mid_fair_target"]:.2f}</p></div>'
-                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">CE SCORE</p><p class="mono" style="color:#ffc947; margin:0; font-style:italic;">{row["capital_efficiency_score"]:.2f}</p></div>'
-                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">INSTITUTIONAL $</p><p class="mono" style="color:#e8e4d9; margin:0;">{row["institutional_money"]}</p></div>'
+                f'<div style="margin-top:0.8rem; display:flex; gap:2.8rem; flex-wrap:wrap;">'
+                f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">CURRENT PRICE</p><p class="mono" style="color:#e8e4d9; margin:0;">${row["current_price"]:.2f}</p></div>'
+                f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">MID UPSIDE</p><p class="mono" style="color:#3ddc84; margin:0;">{row["mid_upside"]:.1f}%</p></div>'
+                f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">MID FAIR TARGET</p><p class="mono" style="color:#3ddc84; margin:0;">${row["mid_fair_target"]:.2f}</p></div>'
+                f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">CE SCORE</p><p class="mono" style="color:#3ddc84; margin:0; font-style:italic;">{row["capital_efficiency_score"]:.2f}</p></div>'
+                f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">INSTITUTIONAL $</p><p class="mono" style="color:#e8e4d9; margin:0;">{row["institutional_money"]}</p></div>'
                 f'</div></div>',
                 unsafe_allow_html=True)
         st.markdown(f'<p class="mono" style="color:#3ddc84;">Total: {len(buy_df)} tickers | Hard Trigger Flags: All Clear</p>', unsafe_allow_html=True)
@@ -523,15 +587,15 @@ elif page == "Hold List":
                 f'<div class="metric-card" style="border-left:7px solid #ffc947;">'
                 f'<div style="display:flex; justify-content:space-between;">'
                 f'<div><span style="font-family:JetBrains Mono,monospace; font-weight:700; font-size:1.15rem; color:#e8e4d9;">{row["ticker"]}</span>'
-                f'<span style="color:#ffc947;">{nm}</span> &nbsp;<span class="mono" style="color:#ffc947;">HOLD</span></div>'
-                f'<div class="mono" style="color:#555e6e; font-size:0.78rem;">{row["date_added"]}</div>'
+                f'<span style="color:#ffc947;">{"&nbsp;<em>← NEW</em>" if row["is_new"] else ""}</span> &nbsp;<span class="mono" style="color:#ffc947;">HOLD</span></div>'
+                f'<div class="mono" style="color:#e8e4d9; font-size:0.78rem;">{row["date_added"]}</div>'
                 f'</div>'
-                f'<div style="margin-top:0.6rem; display:flex; gap:2rem; flex-wrap:wrap;">'
-                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">CURRENT PRICE</p><p class="mono" style="color:#e8e4d9; margin:0;">${row["current_price"]:.2f}</p></div>'
-                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">MID UPSIDE</p><p class="mono" style="color:#ffc947; margin:0;">{row["mid_upside"]:.1f}%</p></div>'
-                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">MID FAIR ENTRY</p><p class="mono" style="color:#ffc947; margin:0;">${row["mid_fair_entry"]:.2f}</p></div>'
-                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">MID FAIR TARGET</p><p class="mono" style="color:#ffc947; margin:0;">${row["mid_fair_target"]:.2f}</p></div>'
-                f'<div><p class="mono" style="color:#8899aa; margin:0; font-size:0.72rem;">CE SCORE</p><p class="mono" style="color:#ffc947; margin:0; font-style:italic;">{row["capital_efficiency_score"]:.2f}</p></div>'
+                f'<div style="margin-top:0.8rem; display:flex; gap:2.8rem; flex-wrap:wrap;">'
+                f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">CURRENT PRICE</p><p class="mono" style="color:#e8e4d9; margin:0;">${row["current_price"]:.2f}</p></div>'
+                f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">MID UPSIDE</p><p class="mono" style="color:#ffc947; margin:0;">{row["mid_upside"]:.1f}%</p></div>'
+                f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">MID FAIR ENTRY</p><p class="mono" style="color:#ffc947; margin:0;">${row["mid_fair_entry"]:.2f}</p></div>'
+                f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">MID FAIR TARGET</p><p class="mono" style="color:#ffc947; margin:0;">${row["mid_fair_target"]:.2f}</p></div>'
+                f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">CE SCORE</p><p class="mono" style="color:#ffc947; margin:0; font-style:italic;">{row["capital_efficiency_score"]:.2f}</p></div>'
                 f'</div></div>',
                 unsafe_allow_html=True)
         st.markdown(f'<p class="mono" style="color:#ffc947;">Total: {len(hold_df)} tickers | Hard Trigger Flags: All Clear</p>', unsafe_allow_html=True)
@@ -763,8 +827,8 @@ elif page == "Market Data Updates":
     col_a, col_b = st.columns([4, 5])
 
     def buy_html_table(df):
-        hdr = "background:#0a1f10; color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #3ddc84;"
-        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #1a2a1a;"
+        hdr = "background:#0a1f10; color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.8rem; border-bottom:2px solid #3ddc84;"
+        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.8rem; border-bottom:1px solid #1a2a1a;"
         rows = ""
         for _, r in df.iterrows():
             rows += (
@@ -793,8 +857,8 @@ elif page == "Market Data Updates":
         )
 
     def hold_html_table(df):
-        hdr = "background:#2b2200; color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #ffc947;"
-        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000;"
+        hdr = "background:#2b2200; color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.8rem; border-bottom:2px solid #ffc947;"
+        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.8rem; border-bottom:1px solid #2a2000;"
         rows = ""
         for _, r in df.iterrows():
             rows += (
@@ -840,29 +904,64 @@ elif page == "Market Data Updates":
             st.error(f"Error: {error}")
         elif result:
             st.success(f"Market Data Update complete — {result['timestamp']}")
+
+            # ── ACTIVE LIST UPDATES ───────────────────────────────────────
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown("#### Buy List Updates")
-                for t, old, new in result["buy"]:
+                for item in result["buy"]:
+                    t, old, new, upside, status = item
                     if new:
                         delta = new - old
                         color = "#3ddc84" if delta >= 0 else "#ff6b6b"
                         delta_str = f"+${delta:.2f}" if delta >= 0 else f"-${abs(delta):.2f}"
-                        st.markdown(f'<p class="mono"><strong>{t}</strong>: ${old:.2f} to <span style="color:{color};">${new:.2f} ({delta_str})</span></p>', unsafe_allow_html=True)
+                        st.markdown(f'<p class="mono"><strong>{t}</strong>: ${old:.2f} → <span style="color:{color};">${new:.2f} ({delta_str})</span> &nbsp;|&nbsp; Upside: <span style="color:#3ddc84;">{upside:.1f}%</span></p>', unsafe_allow_html=True)
                     else:
-                        st.markdown(f'<p class="mono" style="color:#8899aa;"><strong>{t}</strong>: unavailable</p>', unsafe_allow_html=True)
+                        st.markdown(f'<p class="mono" style="color:#8899aa;"><strong>{t}</strong>: price unavailable</p>', unsafe_allow_html=True)
             with col2:
                 st.markdown("#### Hold List Updates")
-                for t, old, new in result["hold"]:
+                for item in result["hold"]:
+                    t, old, new, upside, status = item
                     if new:
                         delta = new - old
                         color = "#3ddc84" if delta >= 0 else "#ff6b6b"
                         delta_str = f"+${delta:.2f}" if delta >= 0 else f"-${abs(delta):.2f}"
-                        st.markdown(f'<p class="mono"><strong>{t}</strong>: ${old:.2f} to <span style="color:{color};">${new:.2f} ({delta_str})</span></p>', unsafe_allow_html=True)
+                        st.markdown(f'<p class="mono"><strong>{t}</strong>: ${old:.2f} → <span style="color:{color};">${new:.2f} ({delta_str})</span> &nbsp;|&nbsp; Upside: <span style="color:#ffc947;">{upside:.1f}%</span></p>', unsafe_allow_html=True)
                     else:
-                        st.markdown(f'<p class="mono" style="color:#8899aa;"><strong>{t}</strong>: unavailable</p>', unsafe_allow_html=True)
+                        st.markdown(f'<p class="mono" style="color:#8899aa;"><strong>{t}</strong>: price unavailable</p>', unsafe_allow_html=True)
+
+            # ── 3-TIER DEFENSE NOTIFICATIONS ─────────────────────────────
             st.markdown("---")
-            st.markdown("#### Hard Trigger Flags")
+            has_tier_events = any([result["auto_upgraded"], result["auto_downgraded"],
+                                   result["auto_retired_buy"], result["auto_retired_hold"]])
+            if has_tier_events:
+                st.markdown("#### 🔀 Universal 3-Tier Defense — Auto-Actions")
+
+                if result["auto_upgraded"]:
+                    st.markdown('<p class="mono" style="color:#3ddc84; font-weight:700;">✅ AUTO-UPGRADED → Buy List</p>', unsafe_allow_html=True)
+                    for t, old, new, upside in result["auto_upgraded"]:
+                        st.markdown(f'<p class="mono" style="color:#3ddc84;">▲ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside reached {upside:.1f}% — moved from Hold to Buy List. Institutional field set to Pending.</p>', unsafe_allow_html=True)
+
+                if result["auto_downgraded"]:
+                    st.markdown('<p class="mono" style="color:#ffc947; font-weight:700;">⚠️ AUTO-DOWNGRADED → Hold List</p>', unsafe_allow_html=True)
+                    for t, old, new, upside, mid_fe in result["auto_downgraded"]:
+                        st.markdown(f'<p class="mono" style="color:#ffc947;">▼ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside compressed to {upside:.1f}% — moved from Buy to Hold List. Mid Fair Entry recalculated: ${mid_fe:.2f}</p>', unsafe_allow_html=True)
+
+                if result["auto_retired_buy"]:
+                    st.markdown('<p class="mono" style="color:#ff6b6b; font-weight:700;">🚫 AUTO-RETIRED from Buy List → Master Log (PASS)</p>', unsafe_allow_html=True)
+                    for t, old, new, upside in result["auto_retired_buy"]:
+                        st.markdown(f'<p class="mono" style="color:#ff6b6b;">✗ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside fell to {upside:.1f}% — below 35% threshold. Logged to Master Log as PASS.</p>', unsafe_allow_html=True)
+
+                if result["auto_retired_hold"]:
+                    st.markdown('<p class="mono" style="color:#ff6b6b; font-weight:700;">🚫 AUTO-RETIRED from Hold List → Master Log (PASS)</p>', unsafe_allow_html=True)
+                    for t, old, new, upside in result["auto_retired_hold"]:
+                        st.markdown(f'<p class="mono" style="color:#ff6b6b;">✗ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside fell to {upside:.1f}% — below 35% threshold. Logged to Master Log as PASS.</p>', unsafe_allow_html=True)
+            else:
+                st.markdown('<p class="mono" style="color:#3ddc84;">✅ 3-Tier Defense — All Clear — no tier changes this update</p>', unsafe_allow_html=True)
+
+            # ── HARD TRIGGER FLAGS ────────────────────────────────────────
+            st.markdown("---")
+            st.markdown("#### 🚩 Hard Trigger Flags")
             flags = check_hard_triggers(get_buy_list(), get_hold_list())
             if flags:
                 for f in flags:
@@ -884,24 +983,30 @@ elif page == "Market Data Updates":
                 if mp_list == "Buy List":
                     conn = get_conn()
                     c = conn.cursor()
-                    c.execute("SELECT mid_upside FROM buy_list WHERE ticker=?", (mp_ticker,))
+                    c.execute("SELECT mid_upside, mid_fair_target FROM buy_list WHERE ticker=?", (mp_ticker,))
                     row = c.fetchone()
                     conn.close()
                     if row:
-                        new_score = round(row[0] / mp_price, 2)
-                        update_price_in_db("buy_list", mp_ticker, mp_price, new_score)
-                        st.success(f"{mp_ticker} updated to ${mp_price:.2f} — CE Score: {new_score:.2f}")
+                        new_mid_upside = round((row[1] - mp_price) / mp_price * 100, 2) if mp_price > 0 and row[1] > 0 else row[0]
+                        new_score = round(new_mid_upside / mp_price, 2)
+                        update_price_in_db("buy_list", mp_ticker, mp_price, new_score, new_mid_upside)
+                        st.success(f"{mp_ticker} updated to ${mp_price:.2f} — Mid Upside: {new_mid_upside:.1f}% — CE Score: {new_score:.2f}")
                     else:
                         st.error(f"{mp_ticker} not found in Buy List.")
                 else:
                     conn = get_conn()
                     c = conn.cursor()
-                    c.execute("SELECT mid_upside, mid_fair_entry FROM hold_list WHERE ticker=?", (mp_ticker,))
+                    c.execute("SELECT mid_upside, mid_fair_target, mid_fair_entry FROM hold_list WHERE ticker=?", (mp_ticker,))
                     row = c.fetchone()
                     conn.close()
                     if row:
-                        new_score = round(row[0] / row[1], 2) if row[1] > 0 else 0
-                        update_price_in_db("hold_list", mp_ticker, mp_price, new_score)
-                        st.success(f"{mp_ticker} updated to ${mp_price:.2f} — CE Score: {new_score:.2f}")
+                        new_mid_upside = round((row[1] - mp_price) / mp_price * 100, 2) if mp_price > 0 and row[1] > 0 else row[0]
+                        new_score = round(new_mid_upside / row[2], 2) if row[2] > 0 else 0
+                        update_price_in_db("hold_list", mp_ticker, mp_price, new_score, new_mid_upside)
+                        st.success(f"{mp_ticker} updated to ${mp_price:.2f} — Mid Upside: {new_mid_upside:.1f}% — CE Score: {new_score:.2f}")
                     else:
                         st.error(f"{mp_ticker} not found in Hold List.")
+
+
+
+*(Updated: May 31, 2026 — 1:15 PM — Dream Team 💙🦋)*
