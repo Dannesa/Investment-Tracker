@@ -827,7 +827,10 @@ elif page == "Market Data Updates":
     col_a, col_b = st.columns([4, 5])
 
     def buy_html_table(df):
-        hdr = "background:#0a1f10; color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.8rem; border-bottom:2px solid #3ddc84;"
+        hdr_base = "background:#0a1f10; color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; border-bottom:2px solid #3ddc84;"
+        hdr_narrow = hdr_base + " padding:0.5rem 0.4rem; width:10%;"
+        hdr_wide   = hdr_base + " padding:0.5rem 1.2rem; width:16%;"
+        hdr_std    = hdr_base + " padding:0.5rem 0.8rem;"
         cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.8rem; border-bottom:1px solid #1a2a1a;"
         rows = ""
         for _, r in df.iterrows():
@@ -845,19 +848,22 @@ elif page == "Market Data Updates":
             f'<div style="border:3px solid #3ddc84; border-left:7px solid #3ddc84; border-radius:5px; overflow:hidden;">'
             f'<table style="width:100%; border-collapse:collapse; background:#0d0f14;">'
             f'<thead><tr>'
-            f'<th style="{hdr}">Ticker</th>'
-            f'<th style="{hdr}">Price</th>'
-            f'<th style="{hdr}">Mid Upside %</th>'
-            f'<th style="{hdr}">Mid Fair Target</th>'
-            f'<th style="{hdr}">CE Score</th>'
-            f'<th style="{hdr}">Date</th>'
+            f'<th style="{hdr_std}">Ticker</th>'
+            f'<th style="{hdr_std}">Price</th>'
+            f'<th style="{hdr_narrow}">Mid Upside %</th>'
+            f'<th style="{hdr_narrow}">Mid Fair Target</th>'
+            f'<th style="{hdr_std}">CE Score</th>'
+            f'<th style="{hdr_wide}">Date</th>'
             f'</tr></thead>'
             f'<tbody>{rows}</tbody>'
             f'</table></div>'
         )
 
     def hold_html_table(df):
-        hdr = "background:#2b2200; color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.8rem; border-bottom:2px solid #ffc947;"
+        hdr_base = "background:#2b2200; color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; border-bottom:2px solid #ffc947;"
+        hdr_narrow = hdr_base + " padding:0.5rem 0.4rem; width:10%;"
+        hdr_wide   = hdr_base + " padding:0.5rem 1.2rem; width:16%;"
+        hdr_std    = hdr_base + " padding:0.5rem 0.8rem;"
         cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.8rem; border-bottom:1px solid #2a2000;"
         rows = ""
         for _, r in df.iterrows():
@@ -875,12 +881,12 @@ elif page == "Market Data Updates":
             f'<div style="border:3px solid #ffc947; border-left:7px solid #ffc947; border-radius:5px; overflow:hidden;">'
             f'<table style="width:100%; border-collapse:collapse; background:#0d0f14;">'
             f'<thead><tr>'
-            f'<th style="{hdr}">Ticker</th>'
-            f'<th style="{hdr}">Price</th>'
-            f'<th style="{hdr}">Mid Upside %</th>'
-            f'<th style="{hdr}">Mid Fair Entry</th>'
-            f'<th style="{hdr}">Mid Fair Target</th>'
-            f'<th style="{hdr}">CE Score</th>'
+            f'<th style="{hdr_wide}">Ticker</th>'
+            f'<th style="{hdr_std}">Price</th>'
+            f'<th style="{hdr_std}">Mid Upside %</th>'
+            f'<th style="{hdr_narrow}">Mid Fair Entry</th>'
+            f'<th style="{hdr_narrow}">Mid Fair Target</th>'
+            f'<th style="{hdr_std}">CE Score</th>'
             f'</tr></thead>'
             f'<tbody>{rows}</tbody>'
             f'</table></div>'
