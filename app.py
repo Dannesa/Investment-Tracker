@@ -524,7 +524,7 @@ if page == "Dashboard":
             st.markdown(
                 f'<div class="metric-card" style="border-left:7px solid #3ddc84; padding:0.7rem 1rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
-                f'&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
+                f'&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
                 f'{"&nbsp;<span style=\'color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.68rem; font-style:italic;\'>← NEW</span>" if row["is_new"] else ""}'
                 f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.72rem;">'
                 f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#3ddc84;">{row["mid_upside"]:.1f}%</span>'
@@ -540,7 +540,7 @@ if page == "Dashboard":
             st.markdown(
                 f'<div class="metric-card" style="border-left:7px solid #ffc947; padding:0.7rem 1rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
-                f'&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
+                f'&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
                 f'{"&nbsp;<span style=\'color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.68rem; font-style:italic;\'>← NEW</span>" if row["is_new"] else ""}'
                 f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.72rem;">'
                 f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#ffc947;">{row["mid_upside"]:.1f}%</span>'
@@ -827,66 +827,78 @@ elif page == "Market Data Updates":
     col_a, col_b = st.columns([4, 5])
 
     def buy_html_table(df):
-        hdr_base = "background:#0a1f10; color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; border-bottom:2px solid #3ddc84;"
-        hdr_narrow = hdr_base + " padding:0.5rem 0.4rem; width:10%;"
-        hdr_wide   = hdr_base + " padding:0.5rem 1.2rem; width:16%;"
-        hdr_std    = hdr_base + " padding:0.5rem 0.8rem;"
-        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.8rem; border-bottom:1px solid #1a2a1a;"
+        hdr = "background:#0a1f10; color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #3ddc84;"
+        c_ticker  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.5rem; border-bottom:1px solid #1a2a1a; width:10%;"
+        c_price   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.5rem; border-bottom:1px solid #1a2a1a; width:12%;"
+        c_narrow  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.3rem; border-bottom:1px solid #1a2a1a; width:9%;"
+        c_score   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #1a2a1a; width:10%;"
+        c_date    = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.8rem; border-bottom:1px solid #1a2a1a; width:18%;"
+        hdr_ticker = hdr + " width:10%;"
+        hdr_price  = hdr + " width:12%;"
+        hdr_narrow = hdr + " width:9%;"
+        hdr_score  = hdr + " width:10%;"
+        hdr_date   = hdr + " width:18%;"
         rows = ""
         for _, r in df.iterrows():
             rows += (
                 f'<tr>'
-                f'<td style="{cell}">{r["ticker"]}</td>'
-                f'<td style="{cell}">${r["current_price"]:.2f}</td>'
-                f'<td style="{cell}">{r["mid_upside"]:.1f}%</td>'
-                f'<td style="{cell}">${r["mid_fair_target"]:.2f}</td>'
-                f'<td style="{cell}"><em>{r["capital_efficiency_score"]:.2f}</em></td>'
-                f'<td style="{cell}">{r["date_added"]}</td>'
+                f'<td style="{c_ticker}">{r["ticker"]}</td>'
+                f'<td style="{c_price}">${r["current_price"]:.2f}</td>'
+                f'<td style="{c_narrow}">{r["mid_upside"]:.1f}%</td>'
+                f'<td style="{c_narrow}">${r["mid_fair_target"]:.2f}</td>'
+                f'<td style="{c_score}"><em>{r["capital_efficiency_score"]:.2f}</em></td>'
+                f'<td style="{c_date}">{r["date_added"]}</td>'
                 f'</tr>'
             )
         return (
             f'<div style="border:3px solid #3ddc84; border-left:7px solid #3ddc84; border-radius:5px; overflow:hidden;">'
-            f'<table style="width:100%; border-collapse:collapse; background:#0d0f14;">'
+            f'<table style="width:100%; border-collapse:collapse; background:#0d0f14; table-layout:fixed;">'
             f'<thead><tr>'
-            f'<th style="{hdr_std}">Ticker</th>'
-            f'<th style="{hdr_std}">Price</th>'
+            f'<th style="{hdr_ticker}">Ticker</th>'
+            f'<th style="{hdr_price}">Price</th>'
             f'<th style="{hdr_narrow}">Mid Upside %</th>'
             f'<th style="{hdr_narrow}">Mid Fair Target</th>'
-            f'<th style="{hdr_std}">CE Score</th>'
-            f'<th style="{hdr_wide}">Date</th>'
+            f'<th style="{hdr_score}">CE Score</th>'
+            f'<th style="{hdr_date}">Date</th>'
             f'</tr></thead>'
             f'<tbody>{rows}</tbody>'
             f'</table></div>'
         )
 
     def hold_html_table(df):
-        hdr_base = "background:#2b2200; color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; border-bottom:2px solid #ffc947;"
-        hdr_narrow = hdr_base + " padding:0.5rem 0.4rem; width:10%;"
-        hdr_wide   = hdr_base + " padding:0.5rem 1.2rem; width:16%;"
-        hdr_std    = hdr_base + " padding:0.5rem 0.8rem;"
-        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.8rem; border-bottom:1px solid #2a2000;"
+        hdr = "background:#2b2200; color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #ffc947;"
+        c_ticker  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.6rem; border-bottom:1px solid #2a2000; width:13%;"
+        c_price   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.5rem; border-bottom:1px solid #2a2000; width:12%;"
+        c_upside  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000; width:12%;"
+        c_narrow  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.3rem; border-bottom:1px solid #2a2000; width:9%;"
+        c_score   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000; width:10%;"
+        hdr_ticker = hdr + " width:13%;"
+        hdr_price  = hdr + " width:12%;"
+        hdr_upside = hdr + " width:12%;"
+        hdr_narrow = hdr + " width:9%;"
+        hdr_score  = hdr + " width:10%;"
         rows = ""
         for _, r in df.iterrows():
             rows += (
                 f'<tr>'
-                f'<td style="{cell}">{r["ticker"]}</td>'
-                f'<td style="{cell}">${r["current_price"]:.2f}</td>'
-                f'<td style="{cell}">{r["mid_upside"]:.1f}%</td>'
-                f'<td style="{cell}">${r["mid_fair_entry"]:.2f}</td>'
-                f'<td style="{cell}">${r["mid_fair_target"]:.2f}</td>'
-                f'<td style="{cell}"><em>{r["capital_efficiency_score"]:.2f}</em></td>'
+                f'<td style="{c_ticker}">{r["ticker"]}</td>'
+                f'<td style="{c_price}">${r["current_price"]:.2f}</td>'
+                f'<td style="{c_upside}">{r["mid_upside"]:.1f}%</td>'
+                f'<td style="{c_narrow}">${r["mid_fair_entry"]:.2f}</td>'
+                f'<td style="{c_narrow}">${r["mid_fair_target"]:.2f}</td>'
+                f'<td style="{c_score}"><em>{r["capital_efficiency_score"]:.2f}</em></td>'
                 f'</tr>'
             )
         return (
             f'<div style="border:3px solid #ffc947; border-left:7px solid #ffc947; border-radius:5px; overflow:hidden;">'
-            f'<table style="width:100%; border-collapse:collapse; background:#0d0f14;">'
+            f'<table style="width:100%; border-collapse:collapse; background:#0d0f14; table-layout:fixed;">'
             f'<thead><tr>'
-            f'<th style="{hdr_wide}">Ticker</th>'
-            f'<th style="{hdr_std}">Price</th>'
-            f'<th style="{hdr_std}">Mid Upside %</th>'
+            f'<th style="{hdr_ticker}">Ticker</th>'
+            f'<th style="{hdr_price}">Price</th>'
+            f'<th style="{hdr_upside}">Mid Upside %</th>'
             f'<th style="{hdr_narrow}">Mid Fair Entry</th>'
             f'<th style="{hdr_narrow}">Mid Fair Target</th>'
-            f'<th style="{hdr_std}">CE Score</th>'
+            f'<th style="{hdr_score}">CE Score</th>'
             f'</tr></thead>'
             f'<tbody>{rows}</tbody>'
             f'</table></div>'
