@@ -867,15 +867,15 @@ elif page == "Market Data Updates":
 
     def hold_html_table(df):
         hdr = "background:#2b2200; color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #ffc947;"
-        c_ticker  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.6rem; border-bottom:1px solid #2a2000; width:13%;"
-        c_price   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.5rem; border-bottom:1px solid #2a2000; width:12%;"
+        c_ticker  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000; width:11%;"
+        c_price   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000; width:10%;"
         c_upside  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000; width:12%;"
-        c_narrow  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.3rem; border-bottom:1px solid #2a2000; width:9%;"
+        c_narrow  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000; width:12%;"
         c_score   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000; width:10%;"
-        hdr_ticker = hdr + " width:13%;"
-        hdr_price  = hdr + " width:12%;"
+        hdr_ticker = hdr + " width:11%;"
+        hdr_price  = hdr + " width:10%;"
         hdr_upside = hdr + " width:12%;"
-        hdr_narrow = hdr + " width:9%;"
+        hdr_narrow = hdr + " width:12%;"
         hdr_score  = hdr + " width:10%;"
         rows = ""
         for _, r in df.iterrows():
