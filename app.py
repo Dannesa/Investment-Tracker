@@ -1108,15 +1108,15 @@ elif page == "Market Data Updates":
 
     def buy_html_table(df):
         hdr = "background:#0a1f10; color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #3ddc84;"
-        c_ticker  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.5rem; border-bottom:1px solid #1a2a1a; width:13%;"
+        c_ticker  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.5rem; border-bottom:1px solid #1a2a1a; width:14%;"
         c_price   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.5rem; border-bottom:1px solid #1a2a1a; width:15%;"
         c_narrow  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.3rem; border-bottom:1px solid #1a2a1a; width:18%;"
-        c_score   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #1a2a1a; width:14%;"
+        c_score   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #1a2a1a; width:13%;"
         c_date    = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.8rem; border-bottom:1px solid #1a2a1a; width:20%;"
-        hdr_ticker = hdr + " width:13%;"
+        hdr_ticker = hdr + " width:14%;"
         hdr_price  = hdr + " width:15%;"
         hdr_narrow = hdr + " width:18%;"
-        hdr_score  = hdr + " width:14%;"
+        hdr_score  = hdr + " width:13%;"
         hdr_date   = hdr + " width:20%;"
         rows = ""
         for _, r in df.iterrows():
@@ -1296,4 +1296,4 @@ elif page == "Market Data Updates":
                     else:
                         st.error(f"{mp_ticker} not found in Hold List.")
 
-# Updated: June 02, 2026 — 3:23 PM — Dream Team
+# Updated: June 02, 2026 — 3:39 PM — Dream Team 💙🦋
