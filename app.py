@@ -1,13 +1,19 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 try:
     import yfinance as yf
     YFINANCE_AVAILABLE = True
 except ImportError:
     YFINANCE_AVAILABLE = False
+
+try:
+    from edgar import Company
+    EDGAR_AVAILABLE = True
+except ImportError:
+    EDGAR_AVAILABLE = False
 
 st.set_page_config(
     page_title="Investment Analysis System",
@@ -132,10 +138,6 @@ def init_db():
     conn.close()
 
 def init_db_market_cap_baseline():
-    """
-    Adds market_cap column to price_history if not already present.
-    Safe to call on every app start — ALTER TABLE is wrapped in try/except.
-    """
     conn = get_conn()
     c = conn.cursor()
     try:
@@ -468,19 +470,85 @@ def run_market_data_update():
         "timestamp": today
     }, None
 
-# ── HARD TRIGGER FLAGS — UPGRADED ────────────────────────────────────────────
+# ── HARD TRIGGER FLAGS — FULL ENGINE ─────────────────────────────────────────
 # Checks implemented:
-#   1. Price movement +/-20% from baseline         (original — preserved)
-#   2. Market cap movement +/-20% from baseline    (NEW)
-#   3. FCF turned negative — graduated             (NEW)
+#   1. Price movement +/-20% from baseline              (yfinance)
+#   2. Market cap movement +/-20% from baseline         (yfinance)
+#   3. FCF turned negative — graduated                  (yfinance)
 #      - 1 negative quarter -> Red Flag (immediate review required)
 #      - 2+ consecutive negative quarters -> AUTOMATIC FAIL
-#   4. Revenue deceleration — graduated            (NEW)
+#   4. Revenue deceleration — graduated                 (yfinance)
 #      - 5+ pt drop AND growth below 8% -> AUTOMATIC FAIL
 #      - 5+ pt drop but still >= 8% -> Hard Trigger — deeper review required
 #      - 3-5 pt drop -> Yellow Flag (with critical note if also < 8%)
 #      - < 8% alone, no significant deceleration -> Yellow Flag (Critical note — low growth tier)
+#   5. Leadership change           — SEC 8-K Item 5.02  (EdgarTools — 90-day lookback)
+#   6. Acquisition / merger        — SEC 8-K Item 1.01 / 2.01
+#   7. Regulatory / legal action   — SEC 8-K Item 8.01
+#   8. Guidance cut / withdrawal   — SEC 8-K Item 2.02 / 7.01
+#   9. Share dilution event        — SEC 8-K Item 1.01 / 3.02
+#  10. Debt / credit structure change — SEC 8-K Item 2.03
 # ─────────────────────────────────────────────────────────────────────────────
+
+# 8-K item number -> condition label mapping
+EIGHT_K_TRIGGERS = {
+    "5.02": ("Leadership Change",        "🚩"),
+    "1.01": ("Material Agreement / M&A", "🚩"),
+    "2.01": ("Acquisition / Disposal",   "🚩"),
+    "8.01": ("Regulatory / Legal Action","🚩"),
+    "2.02": ("Guidance / Earnings Event","⚠️"),
+    "7.01": ("Reg FD / Guidance Update", "⚠️"),
+    "3.02": ("Share Dilution Event",     "🚩"),
+    "2.03": ("Debt / Credit Obligation", "🚩"),
+}
+
+def check_8k_triggers(ticker):
+    """
+    Fetches 8-K filings for the last 90 days via EdgarTools (free, no API key).
+    Returns a list of flag strings for any matched trigger items.
+    Falls back gracefully if EdgarTools is unavailable or fetch fails.
+    """
+    if not EDGAR_AVAILABLE:
+        return ["⚠️ EdgarTools not installed — 8-K checks skipped. Run: pip install edgartools"]
+
+    flags = []
+    cutoff = date.today() - timedelta(days=90)
+
+    try:
+        company = Company(ticker)
+        filings = company.get_filings(form="8-K")
+
+        if filings is None:
+            return []
+
+        for filing in filings:
+            try:
+                # Parse filing date
+                filing_date_str = str(filing.filing_date)
+                filing_date = datetime.strptime(filing_date_str[:10], "%Y-%m-%d").date()
+
+                # Only look at filings within 90-day lookback window
+                if filing_date < cutoff:
+                    break  # Filings returned newest-first — safe to stop here
+
+                # Check items listed in the 8-K
+                items_str = str(getattr(filing, "items", "") or "")
+                filing_date_fmt = filing_date.strftime("%b %d, %Y")
+
+                for item_num, (label, emoji) in EIGHT_K_TRIGGERS.items():
+                    if item_num in items_str:
+                        flags.append(
+                            f"{emoji} {ticker} — 8-K Item {item_num}: {label} "
+                            f"detected — Filed {filing_date_fmt} — review 8-K filing"
+                        )
+
+            except Exception:
+                continue
+
+    except Exception:
+        flags.append(f"⚠️ {ticker} — 8-K lookup failed — manual SEC EDGAR check recommended")
+
+    return flags
 
 def store_baseline_snapshot(ticker, price, market_cap):
     conn = get_conn()
@@ -594,90 +662,93 @@ def check_hard_triggers(df_buy, df_hold):
         fundamentals = fetch_fundamentals_yfinance(t)
         if fundamentals is None:
             flags.append(f"⚠️ {t} — Fundamentals unavailable — manual review required")
-            continue
+        else:
+            current_mktcap = fundamentals["market_cap"]
+            fcf_values     = fundamentals["fcf_values"]
+            rev_growth     = fundamentals["revenue_growth_rates"]
 
-        current_mktcap = fundamentals["market_cap"]
-        fcf_values     = fundamentals["fcf_values"]
-        rev_growth     = fundamentals["revenue_growth_rates"]
+            if current_mktcap:
+                store_baseline_snapshot(t, current_price, current_mktcap)
 
-        if current_mktcap:
-            store_baseline_snapshot(t, current_price, current_mktcap)
-
-        # ── CHECK 2: MARKET CAP MOVEMENT +/-20% FROM BASELINE ────────────
-        if baseline_mktcap and baseline_mktcap > 0 and current_mktcap:
-            mktcap_move = abs(current_mktcap - baseline_mktcap) / baseline_mktcap * 100
-            if mktcap_move >= 20:
-                direction = "+" if current_mktcap > baseline_mktcap else "-"
-                flags.append(
-                    f"🚩 {t} — Market cap moved {direction}{mktcap_move:.1f}% from baseline"
-                )
-
-        # ── CHECK 3: FCF TURNED NEGATIVE — GRADUATED ─────────────────────
-        if fcf_values:
-            most_recent_fcf = fcf_values[0]
-            if most_recent_fcf < 0:
-                if len(fcf_values) >= 2 and fcf_values[1] < 0:
+            # ── CHECK 2: MARKET CAP MOVEMENT +/-20% FROM BASELINE ────────
+            if baseline_mktcap and baseline_mktcap > 0 and current_mktcap:
+                mktcap_move = abs(current_mktcap - baseline_mktcap) / baseline_mktcap * 100
+                if mktcap_move >= 20:
+                    direction = "+" if current_mktcap > baseline_mktcap else "-"
                     flags.append(
-                        f"🚩 {t} — FCF NEGATIVE 2+ CONSECUTIVE QUARTERS "
-                        f"(most recent: ${most_recent_fcf / 1e6:.1f}M | "
-                        f"prior: ${fcf_values[1] / 1e6:.1f}M) — AUTOMATIC FAIL"
-                    )
-                else:
-                    flags.append(
-                        f"🚩 {t} — FCF NEGATIVE (most recent quarter: "
-                        f"${most_recent_fcf / 1e6:.1f}M) — immediate review required"
+                        f"🚩 {t} — Market cap moved {direction}{mktcap_move:.1f}% from baseline"
                     )
 
-        # ── CHECK 4: REVENUE DECELERATION — GRADUATED ────────────────────
-        if len(rev_growth) >= 2:
-            latest_rate   = rev_growth[-1]
-            previous_rate = rev_growth[-2]
-            deceleration  = previous_rate - latest_rate
-            below_critical = latest_rate < 8.0
+            # ── CHECK 3: FCF TURNED NEGATIVE — GRADUATED ─────────────────
+            if fcf_values:
+                most_recent_fcf = fcf_values[0]
+                if most_recent_fcf < 0:
+                    if len(fcf_values) >= 2 and fcf_values[1] < 0:
+                        flags.append(
+                            f"🚩 {t} — FCF NEGATIVE 2+ CONSECUTIVE QUARTERS "
+                            f"(most recent: ${most_recent_fcf / 1e6:.1f}M | "
+                            f"prior: ${fcf_values[1] / 1e6:.1f}M) — AUTOMATIC FAIL"
+                        )
+                    else:
+                        flags.append(
+                            f"🚩 {t} — FCF NEGATIVE (most recent quarter: "
+                            f"${most_recent_fcf / 1e6:.1f}M) — immediate review required"
+                        )
 
-            # AUTOMATIC FAIL: 5+ pt drop AND below 8% — both conditions met
-            if deceleration >= 5.0 and below_critical:
-                consecutive = False
-                if len(rev_growth) >= 3:
-                    prior_decel = rev_growth[-2] - rev_growth[-3]
-                    if prior_decel > 0:
-                        consecutive = True
-                consec_note = " (2+ consecutive periods)" if consecutive else ""
-                flags.append(
-                    f"🚩 {t} — Revenue deceleration{consec_note}: "
-                    f"{previous_rate:.1f}% -> {latest_rate:.1f}% YoY "
-                    f"({deceleration:.1f}pt drop) — BELOW 8% CRITICAL THRESHOLD — AUTOMATIC FAIL"
-                )
+            # ── CHECK 4: REVENUE DECELERATION — GRADUATED ────────────────
+            if len(rev_growth) >= 2:
+                latest_rate    = rev_growth[-1]
+                previous_rate  = rev_growth[-2]
+                deceleration   = previous_rate - latest_rate
+                below_critical = latest_rate < 8.0
 
-            # 5+ pt drop but still >= 8% -> Hard Trigger — deeper review required
-            elif deceleration >= 5.0 and not below_critical:
-                consecutive = False
-                if len(rev_growth) >= 3:
-                    prior_decel = rev_growth[-2] - rev_growth[-3]
-                    if prior_decel > 0:
-                        consecutive = True
-                consec_note = " (2+ consecutive periods)" if consecutive else ""
-                flags.append(
-                    f"🚩 {t} — Revenue deceleration{consec_note}: "
-                    f"{previous_rate:.1f}% -> {latest_rate:.1f}% YoY "
-                    f"({deceleration:.1f}pt drop) — Hard Trigger — deeper review required"
-                )
+                # AUTOMATIC FAIL: 5+ pt drop AND below 8% — both conditions met
+                if deceleration >= 5.0 and below_critical:
+                    consecutive = False
+                    if len(rev_growth) >= 3:
+                        prior_decel = rev_growth[-2] - rev_growth[-3]
+                        if prior_decel > 0:
+                            consecutive = True
+                    consec_note = " (2+ consecutive periods)" if consecutive else ""
+                    flags.append(
+                        f"🚩 {t} — Revenue deceleration{consec_note}: "
+                        f"{previous_rate:.1f}% -> {latest_rate:.1f}% YoY "
+                        f"({deceleration:.1f}pt drop) — BELOW 8% CRITICAL THRESHOLD — AUTOMATIC FAIL"
+                    )
 
-            # 3-5 pt drop -> Yellow Flag (with critical note if also < 8%)
-            elif 3.0 <= deceleration < 5.0:
-                critical_note = " — CRITICAL NOTE: also below 8% low growth tier" if below_critical else ""
-                flags.append(
-                    f"⚠️ {t} — Yellow Flag: Mild revenue deceleration: "
-                    f"{previous_rate:.1f}% -> {latest_rate:.1f}% YoY "
-                    f"({deceleration:.1f}pt drop) — deeper review recommended{critical_note}"
-                )
+                # 5+ pt drop but still >= 8% -> Hard Trigger — deeper review required
+                elif deceleration >= 5.0 and not below_critical:
+                    consecutive = False
+                    if len(rev_growth) >= 3:
+                        prior_decel = rev_growth[-2] - rev_growth[-3]
+                        if prior_decel > 0:
+                            consecutive = True
+                    consec_note = " (2+ consecutive periods)" if consecutive else ""
+                    flags.append(
+                        f"🚩 {t} — Revenue deceleration{consec_note}: "
+                        f"{previous_rate:.1f}% -> {latest_rate:.1f}% YoY "
+                        f"({deceleration:.1f}pt drop) — Hard Trigger — deeper review required"
+                    )
 
-            # < 8% alone, no significant deceleration -> Yellow Flag (Critical note — low growth tier)
-            elif below_critical and deceleration >= 0:
-                flags.append(
-                    f"⚠️ {t} — Yellow Flag: Revenue growth at {latest_rate:.1f}% "
-                    f"— Critical note: low growth tier (below 8% threshold)"
-                )
+                # 3-5 pt drop -> Yellow Flag (with critical note if also < 8%)
+                elif 3.0 <= deceleration < 5.0:
+                    critical_note = " — CRITICAL NOTE: also below 8% low growth tier" if below_critical else ""
+                    flags.append(
+                        f"⚠️ {t} — Yellow Flag: Mild revenue deceleration: "
+                        f"{previous_rate:.1f}% -> {latest_rate:.1f}% YoY "
+                        f"({deceleration:.1f}pt drop) — deeper review recommended{critical_note}"
+                    )
+
+                # < 8% alone, no significant deceleration -> Yellow Flag (Critical note — low growth tier)
+                elif below_critical and deceleration >= 0:
+                    flags.append(
+                        f"⚠️ {t} — Yellow Flag: Revenue growth at {latest_rate:.1f}% "
+                        f"— Critical note: low growth tier (below 8% threshold)"
+                    )
+
+        # ── CHECKS 5-10: SEC 8-K MATERIAL EVENT MONITOR (90-day lookback) ─
+        eight_k_flags = check_8k_triggers(t)
+        flags.extend(eight_k_flags)
 
     conn.close()
     return flags
@@ -1022,12 +1093,17 @@ elif page == "Market Data Updates":
     st.markdown(
         '<div class="header-block" style="border-left:7px solid #2a7fff;">'
         '<h1 style="color:#2a7fff;">Market Data Updates</h1>'
-        '<p class="mono" style="color:#8899aa; font-size:0.72rem;">Refreshes prices, recalculates CE Scores, checks Hard Trigger Flags.</p>'
+        '<p class="mono" style="color:#8899aa; font-size:0.72rem;">Refreshes prices, recalculates CE Scores, checks Hard Trigger Flags (yfinance + SEC 8-K).</p>'
         '</div>', unsafe_allow_html=True)
     if not YFINANCE_AVAILABLE:
         st.error("yfinance not installed. Run: pip install yfinance")
     else:
-        st.markdown('<p class="mono" style="color:#3ddc84; font-size:0.72rem;">yfinance available</p>', unsafe_allow_html=True)
+        st.markdown('<p class="mono" style="color:#3ddc84; font-size:0.72rem;">yfinance available ✅</p>', unsafe_allow_html=True)
+    if not EDGAR_AVAILABLE:
+        st.warning("EdgarTools not installed — SEC 8-K checks disabled. Run: pip install edgartools")
+    else:
+        st.markdown('<p class="mono" style="color:#3ddc84; font-size:0.72rem;">EdgarTools available ✅ — SEC 8-K monitor active (90-day lookback)</p>', unsafe_allow_html=True)
+
     col_a, col_b = st.columns([4, 5])
 
     def buy_html_table(df):
@@ -1174,7 +1250,8 @@ elif page == "Market Data Updates":
                 st.markdown('<p class="mono" style="color:#3ddc84;">✅ 3-Tier Defense — All Clear — no tier changes this update</p>', unsafe_allow_html=True)
             st.markdown("---")
             st.markdown("#### 🚩 Hard Trigger Flags")
-            flags = check_hard_triggers(get_buy_list(), get_hold_list())
+            with st.spinner("Running Hard Trigger checks (yfinance + SEC 8-K)..."):
+                flags = check_hard_triggers(get_buy_list(), get_hold_list())
             if flags:
                 for f in flags:
                     st.markdown(f'<p class="trigger-flag">{f}</p>', unsafe_allow_html=True)
@@ -1219,4 +1296,4 @@ elif page == "Market Data Updates":
                     else:
                         st.error(f"{mp_ticker} not found in Hold List.")
 
-# Updated: June 02, 2026 — 5:22 AM — Dream Team
+# Updated: June 02, 2026 — Dream Team 💙🦋
