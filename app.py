@@ -1296,4 +1296,4 @@ elif page == "Market Data Updates":
                     else:
                         st.error(f"{mp_ticker} not found in Hold List.")
 
-# Updated: June 02, 2026 — 3:23 PM — Dream Team 💙🦋
+# Updated: June 02, 2026 — 3:23 PM — Dream Team
