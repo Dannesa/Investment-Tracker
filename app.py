@@ -37,6 +37,7 @@ h1, h2, h3 { font-family: 'JetBrains Mono', monospace; letter-spacing: -0.02em; 
 .hardpass-badge { background: #1a0a0a; color: #cc3333; border: 1px solid #4d1111; padding: 2px 8px; border-radius: 3px; font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; font-weight: 700; }
 .trigger-clear { color: #3ddc84; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
 .trigger-flag { color: #ffc947; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+.trigger-block { color: #ff6b6b; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
 .header-block { border-left: 3px solid #2a7fff; padding-left: 1rem; margin-bottom: 1.5rem; }
 .mono { font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
 div[data-testid="stSidebarContent"] { background-color: #0a0c10; border-right: 1px solid #1e2736; }
@@ -46,7 +47,7 @@ div[data-testid="stSidebarContent"] { background-color: #0a0c10; border-right: 1
 </style>
 """, unsafe_allow_html=True)
 
-# ── BORDER STYLE HELPERS ──────────────────────────────────────────────────────
+# ── DISPLAY HELPERS ───────────────────────────────────────────────────────────
 
 def dash_card(color, label, value, sub):
     return (
@@ -65,10 +66,11 @@ def log_counter_card(color, text):
     )
 
 def log_record_row(is_unified, border_color, ticker_color, date_color, row_id, ticker, date_str, badge_html, next_review):
-    if is_unified:
-        border_style = f"border: 2px solid {border_color}; border-left: 7px solid {border_color};"
-    else:
-        border_style = f"border-left: 7px solid {border_color};"
+    border_style = (
+        f"border: 2px solid {border_color}; border-left: 7px solid {border_color};"
+        if is_unified else
+        f"border-left: 7px solid {border_color};"
+    )
     return (
         f'<div class="metric-card" style="{border_style} padding: 0.7rem 1.2rem; margin-bottom: 0.4rem;">'
         f'<div style="display:flex; align-items:center; gap:1.2rem; flex-wrap:wrap;">'
@@ -77,8 +79,7 @@ def log_record_row(is_unified, border_color, ticker_color, date_color, row_id, t
         f'{badge_html}'
         f'<span class="mono" style="color:{date_color};">{date_str}</span>'
         f'<span class="mono" style="color:#555e6e; font-size:0.78rem; margin-left:auto;">{next_review}</span>'
-        f'</div>'
-        f'</div>'
+        f'</div></div>'
     )
 
 def verdict_badge_html(verdict, is_unified):
@@ -97,7 +98,7 @@ def verdict_badge_html(verdict, is_unified):
         style = muted.get(verdict, muted["PASS"])
         return f'<span style="padding:2px 8px; border-radius:3px; font-family:JetBrains Mono,monospace; font-size:0.78rem; font-weight:700; {style}">{label.get(verdict, verdict)}</span>'
 
-# ── DB ────────────────────────────────────────────────────────────────────────
+# ── DB INIT ───────────────────────────────────────────────────────────────────
 
 def get_conn():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -115,36 +116,40 @@ def init_db():
         mid_fair_entry REAL, mid_fair_target REAL DEFAULT 0,
         capital_efficiency_score REAL,
         date_added TEXT, is_new INTEGER DEFAULT 0, notes TEXT DEFAULT '')""")
-    try:
-        c.execute("ALTER TABLE buy_list ADD COLUMN mid_fair_target REAL DEFAULT 0")
-    except Exception:
-        pass
-    try:
-        c.execute("ALTER TABLE hold_list ADD COLUMN mid_fair_target REAL DEFAULT 0")
-    except Exception:
-        pass
     c.execute("""CREATE TABLE IF NOT EXISTS master_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL,
         date_analyzed TEXT, verdict TEXT, notes TEXT DEFAULT '',
         next_review TEXT DEFAULT 'Trigger-phrase governed',
         is_unified INTEGER DEFAULT 1)""")
+    # price_history: one row per ticker — baseline anchored to last Unified re-analysis
+    # shares_outstanding added for redesigned Flag #5 (share-count-driven market cap check)
     c.execute("""CREATE TABLE IF NOT EXISTS price_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, price REAL, fetched_at TEXT)""")
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticker TEXT UNIQUE,
+        price REAL,
+        market_cap REAL DEFAULT 0,
+        shares_outstanding REAL DEFAULT 0,
+        baseline_date TEXT)""")
+    # Safe migrations
+    for ddl in [
+        "ALTER TABLE buy_list ADD COLUMN mid_fair_target REAL DEFAULT 0",
+        "ALTER TABLE hold_list ADD COLUMN mid_fair_target REAL DEFAULT 0",
+        "ALTER TABLE master_log ADD COLUMN is_unified INTEGER DEFAULT 1",
+        "ALTER TABLE price_history ADD COLUMN shares_outstanding REAL DEFAULT 0",
+        "ALTER TABLE price_history ADD COLUMN baseline_date TEXT",
+        "ALTER TABLE price_history ADD COLUMN market_cap REAL DEFAULT 0",
+    ]:
+        try:
+            c.execute(ddl)
+        except Exception:
+            pass
+    # Collapse any multi-row price_history to one row per ticker (migration guard)
     try:
-        c.execute("ALTER TABLE master_log ADD COLUMN is_unified INTEGER DEFAULT 1")
+        c.execute("""DELETE FROM price_history WHERE id NOT IN (
+            SELECT MIN(id) FROM price_history GROUP BY ticker)""")
     except Exception:
         pass
     conn.commit()
-    conn.close()
-
-def init_db_market_cap_baseline():
-    conn = get_conn()
-    c = conn.cursor()
-    try:
-        c.execute("ALTER TABLE price_history ADD COLUMN market_cap REAL DEFAULT 0")
-        conn.commit()
-    except Exception:
-        pass
     conn.close()
 
 def is_seeded():
@@ -164,35 +169,34 @@ def seed_v55():
     buy_data = [
         ("GTLB", 25.98, 50.0, 39.0,  "Pending", "May 11, 2026", 0),
         ("NKE",  44.14, 60.0, 70.6,  "Pending", "May 11, 2026", 1),
-        ("CRM",  181.82, 52.5, 277.3, "Pending", "May 11, 2026", 0),
-        ("ADBE", 247.36, 60.0, 395.8, "Pending", "May 11, 2026", 0),
+        ("CRM",  181.82, 52.5, 277.3,"Pending", "May 11, 2026", 0),
+        ("ADBE", 247.36, 60.0, 395.8,"Pending", "May 11, 2026", 0),
     ]
     for ticker, price, mid_up, mid_ft, inst, dt, is_new in buy_data:
         score = round(mid_up / price, 2)
         c.execute("""INSERT OR IGNORE INTO buy_list
-            (ticker, current_price, mid_upside, mid_fair_target,
-             capital_efficiency_score, institutional_money, date_added, is_new)
-             VALUES (?,?,?,?,?,?,?,?)""",
+            (ticker,current_price,mid_upside,mid_fair_target,capital_efficiency_score,
+             institutional_money,date_added,is_new) VALUES (?,?,?,?,?,?,?,?)""",
             (ticker, price, mid_up, mid_ft, score, inst, dt, is_new))
     hold_data = [
-        ("GFI",   44.86, 40.0, 30.5,  45.7,   "May 11, 2026", 0),
-        ("HALO",  66.41, 50.0, 55.0,  82.5,   "May 11, 2026", 0),
-        ("TW",   108.81, 50.0, 87.5,  163.2,  "May 11, 2026", 0),
-        ("NOW",   92.50, 42.5, 76.0,  131.8,  "May 11, 2026", 0),
-        ("NEM",  120.67, 52.5, 96.5,  184.0,  "May 11, 2026", 0),
-        ("NDAQ",  88.48, 52.5, 80.5,  135.0,  "May 12, 2026", 0),
-        ("SNOW", 154.06, 37.5, 110.0, 211.8,  "May 11, 2026", 0),
-        ("AMZN", 271.82, 32.5, 202.5, 360.2,  "May 11, 2026", 0),
-        ("INTU", 397.54, 37.5, 330.0, 546.6,  "May 11, 2026", 0),
-        ("EQIX",1073.23, 37.5, 740.0, 1475.7, "May 12, 2026", 0),
-        ("AME",  231.61, 42.5, 165.0, 330.0,  "May 12, 2026", 0),
-        ("CRWD", 548.02, 42.5, 335.0, 781.4,  "May 12, 2026", 1),
+        ("GFI",   44.86, 40.0, 30.5, 45.7,   "May 11, 2026", 0),
+        ("HALO",  66.41, 50.0, 55.0, 82.5,   "May 11, 2026", 0),
+        ("TW",   108.81, 50.0, 87.5, 163.2,  "May 11, 2026", 0),
+        ("NOW",   92.50, 42.5, 76.0, 131.8,  "May 11, 2026", 0),
+        ("NEM",  120.67, 52.5, 96.5, 184.0,  "May 11, 2026", 0),
+        ("NDAQ",  88.48, 52.5, 80.5, 135.0,  "May 12, 2026", 0),
+        ("SNOW", 154.06, 37.5, 110.0,211.8,  "May 11, 2026", 0),
+        ("AMZN", 271.82, 32.5, 202.5,360.2,  "May 11, 2026", 0),
+        ("INTU", 397.54, 37.5, 330.0,546.6,  "May 11, 2026", 0),
+        ("EQIX",1073.23, 37.5, 740.0,1475.7, "May 12, 2026", 0),
+        ("AME",  231.61, 42.5, 165.0,330.0,  "May 12, 2026", 0),
+        ("CRWD", 548.02, 42.5, 335.0,781.4,  "May 12, 2026", 1),
     ]
     for ticker, price, mid_up, mid_fe, mid_ft, dt, is_new in hold_data:
         score = round(mid_up / mid_fe, 2)
         c.execute("""INSERT OR IGNORE INTO hold_list
-            (ticker, current_price, mid_upside, mid_fair_entry, mid_fair_target,
-             capital_efficiency_score, date_added, is_new) VALUES (?,?,?,?,?,?,?,?)""",
+            (ticker,current_price,mid_upside,mid_fair_entry,mid_fair_target,
+             capital_efficiency_score,date_added,is_new) VALUES (?,?,?,?,?,?,?,?)""",
             (ticker, price, mid_up, mid_fe, mid_ft, score, dt, is_new))
     for ticker, dt in [("GTLB","May 4, 2026"),("ADBE","May 4, 2026"),("NKE","May 4, 2026"),("CRM","May 4, 2026")]:
         c.execute("INSERT OR IGNORE INTO master_log (ticker,date_analyzed,verdict,is_unified) VALUES (?,?,'BUY',1)", (ticker, dt))
@@ -255,6 +259,8 @@ def seed_v55():
     conn.commit()
     conn.close()
 
+# ── DB HELPERS ────────────────────────────────────────────────────────────────
+
 def get_buy_list():
     conn = get_conn()
     df = pd.read_sql("SELECT * FROM buy_list ORDER BY capital_efficiency_score DESC", conn)
@@ -282,7 +288,7 @@ def lookup_ticker(ticker):
     ticker = ticker.upper().strip()
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT verdict, date_analyzed, notes, is_unified, id FROM master_log WHERE ticker=? ORDER BY id DESC LIMIT 1", (ticker,))
+    c.execute("SELECT verdict,date_analyzed,notes,is_unified,id FROM master_log WHERE ticker=? ORDER BY id DESC LIMIT 1", (ticker,))
     row = c.fetchone()
     conn.close()
     return row
@@ -294,280 +300,48 @@ def add_master_log(ticker, date_str, verdict, notes="", is_unified=1):
     c.execute("SELECT id FROM master_log WHERE ticker=?", (ticker,))
     existing = c.fetchone()
     if existing:
-        c.execute("UPDATE master_log SET date_analyzed=?, verdict=?, notes=?, is_unified=? WHERE ticker=?",
+        c.execute("UPDATE master_log SET date_analyzed=?,verdict=?,notes=?,is_unified=? WHERE ticker=?",
                   (date_str, verdict, notes, is_unified, ticker))
     else:
-        c.execute("INSERT INTO master_log (ticker, date_analyzed, verdict, notes, is_unified) VALUES (?,?,?,?,?)",
+        c.execute("INSERT INTO master_log (ticker,date_analyzed,verdict,notes,is_unified) VALUES (?,?,?,?,?)",
                   (ticker, date_str, verdict, notes, is_unified))
     conn.commit()
     conn.close()
 
-def add_or_update_buy(ticker, price, mid_up, mid_ft, inst, date_str, notes):
-    ticker = ticker.upper().strip()
-    score = round(mid_up / price, 2) if price > 0 else 0
+# ── BASELINE SNAPSHOT ─────────────────────────────────────────────────────────
+# Resets ONLY on genuine Unified 7 Points re-analysis (add_or_update_buy /
+# add_or_update_hold). Auto-routing tier changes do NOT call this function.
+# One row per ticker (UNIQUE constraint). Stores price, market_cap,
+# shares_outstanding, and baseline_date for Flag #1 and redesigned Flag #5.
+
+def reset_baseline_snapshot(ticker, price, market_cap, shares_outstanding):
+    baseline_date = date.today().strftime("%Y-%m-%d")
     conn = get_conn()
     c = conn.cursor()
-    c.execute("UPDATE buy_list SET is_new=0")
-    c.execute("""INSERT INTO buy_list
-        (ticker, current_price, mid_upside, mid_fair_target, capital_efficiency_score,
-         institutional_money, date_added, is_new, notes)
-        VALUES (?,?,?,?,?,?,?,1,?)
+    c.execute("""
+        INSERT INTO price_history (ticker, price, market_cap, shares_outstanding, baseline_date)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(ticker) DO UPDATE SET
-            current_price=excluded.current_price, mid_upside=excluded.mid_upside,
-            mid_fair_target=excluded.mid_fair_target,
-            capital_efficiency_score=excluded.capital_efficiency_score,
-            institutional_money=excluded.institutional_money, date_added=excluded.date_added,
-            is_new=1, notes=excluded.notes""",
-        (ticker, price, mid_up, mid_ft, score, inst, date_str, notes))
-    conn.commit()
-    conn.close()
-    add_master_log(ticker, date_str, "BUY", notes, is_unified=1)
-
-def add_or_update_hold(ticker, price, mid_up, mid_fe, mid_ft, date_str, notes):
-    ticker = ticker.upper().strip()
-    score = round(mid_up / mid_fe, 2) if mid_fe > 0 else 0
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("UPDATE hold_list SET is_new=0")
-    c.execute("""INSERT INTO hold_list
-        (ticker, current_price, mid_upside, mid_fair_entry, mid_fair_target,
-         capital_efficiency_score, date_added, is_new, notes)
-        VALUES (?,?,?,?,?,?,?,1,?)
-        ON CONFLICT(ticker) DO UPDATE SET
-            current_price=excluded.current_price, mid_upside=excluded.mid_upside,
-            mid_fair_entry=excluded.mid_fair_entry,
-            mid_fair_target=excluded.mid_fair_target,
-            capital_efficiency_score=excluded.capital_efficiency_score,
-            date_added=excluded.date_added, is_new=1, notes=excluded.notes""",
-        (ticker, price, mid_up, mid_fe, mid_ft, score, date_str, notes))
-    conn.commit()
-    conn.close()
-    add_master_log(ticker, date_str, "HOLD", notes, is_unified=1)
-
-def remove_from_buy(ticker):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("DELETE FROM buy_list WHERE ticker=?", (ticker.upper(),))
+            price=excluded.price,
+            market_cap=excluded.market_cap,
+            shares_outstanding=excluded.shares_outstanding,
+            baseline_date=excluded.baseline_date
+    """, (ticker, price, market_cap or 0, shares_outstanding or 0, baseline_date))
     conn.commit()
     conn.close()
 
-def remove_from_hold(ticker):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("DELETE FROM hold_list WHERE ticker=?", (ticker.upper(),))
-    conn.commit()
-    conn.close()
+# ── FUNDAMENTALS FETCH ────────────────────────────────────────────────────────
 
-def update_price_in_db(table, ticker, new_price, new_score, new_mid_upside=None):
-    conn = get_conn()
-    c = conn.cursor()
-    today = date.today().strftime("%b %d, %Y")
-    if new_mid_upside is not None:
-        c.execute(f"UPDATE {table} SET current_price=?, capital_efficiency_score=?, mid_upside=?, date_added=? WHERE ticker=?",
-                  (new_price, new_score, new_mid_upside, today, ticker))
-    else:
-        c.execute(f"UPDATE {table} SET current_price=?, capital_efficiency_score=?, date_added=? WHERE ticker=?",
-                  (new_price, new_score, today, ticker))
-    conn.commit()
-    conn.close()
-
-def fetch_prices_yfinance(tickers):
-    results = {}
-    if not YFINANCE_AVAILABLE:
-        return results
-    for t in tickers:
-        try:
-            info = yf.Ticker(t).fast_info
-            price = round(float(info.last_price), 2)
-            results[t] = price
-        except Exception:
-            results[t] = None
-    return results
-
-def run_market_data_update():
-    buy_df = get_buy_list()
-    hold_df = get_hold_list()
-    all_tickers = list(buy_df["ticker"]) + list(hold_df["ticker"])
-    if not YFINANCE_AVAILABLE:
-        return None, "yfinance not installed."
-    prices = fetch_prices_yfinance(all_tickers)
-    today = date.today().strftime("%b %d, %Y")
-
-    updated_buy = []
-    auto_downgraded = []
-    auto_retired_buy = []
-
-    for _, row in buy_df.iterrows():
-        t = row["ticker"]
-        new_price = prices.get(t)
-        if not new_price:
-            updated_buy.append((t, row["current_price"], None, row["mid_upside"], "unchanged"))
-            continue
-        mid_ft = row["mid_fair_target"]
-        new_mid_upside = round((mid_ft - new_price) / new_price * 100, 2) if new_price > 0 and mid_ft > 0 else row["mid_upside"]
-
-        if new_mid_upside >= 50.0:
-            new_score = round(new_mid_upside / new_price, 2)
-            update_price_in_db("buy_list", t, new_price, new_score, new_mid_upside)
-            updated_buy.append((t, row["current_price"], new_price, new_mid_upside, "active"))
-
-        elif new_mid_upside >= 35.0:
-            mid_fe_new = round(mid_ft / 1.5, 2)
-            remove_from_buy(t)
-            add_or_update_hold(t, new_price, new_mid_upside, mid_fe_new, mid_ft, today,
-                               f"Auto-downgraded from Buy List — Mid Upside compressed to {new_mid_upside:.1f}% — {today}")
-            auto_downgraded.append((t, row["current_price"], new_price, new_mid_upside, mid_fe_new))
-
-        else:
-            remove_from_buy(t)
-            add_master_log(t, today, "PASS", is_unified=1,
-                           notes=f"Auto-retired from Buy List — Mid Upside fell to {new_mid_upside:.1f}% (below 35% threshold) — {today}")
-            auto_retired_buy.append((t, row["current_price"], new_price, new_mid_upside))
-
-    updated_hold = []
-    auto_upgraded = []
-    auto_retired_hold = []
-
-    for _, row in hold_df.iterrows():
-        t = row["ticker"]
-        new_price = prices.get(t)
-        if not new_price:
-            updated_hold.append((t, row["current_price"], None, row["mid_upside"], "unchanged"))
-            continue
-        mid_ft = row["mid_fair_target"]
-        new_mid_upside = round((mid_ft - new_price) / new_price * 100, 2) if new_price > 0 and mid_ft > 0 else row["mid_upside"]
-
-        if new_mid_upside >= 50.0:
-            remove_from_hold(t)
-            add_or_update_buy(t, new_price, new_mid_upside, mid_ft, "Pending", today,
-                              f"Auto-upgraded from Hold List — Mid Upside reached {new_mid_upside:.1f}% — {today}")
-            auto_upgraded.append((t, row["current_price"], new_price, new_mid_upside))
-
-        elif new_mid_upside >= 35.0:
-            mid_fe_new = round(mid_ft / 1.5, 2)
-            new_score = round(new_mid_upside / mid_fe_new, 2) if mid_fe_new > 0 else 0
-            update_price_in_db("hold_list", t, new_price, new_score, new_mid_upside)
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute("UPDATE hold_list SET mid_fair_entry=? WHERE ticker=?", (mid_fe_new, t))
-            conn.commit()
-            conn.close()
-            updated_hold.append((t, row["current_price"], new_price, new_mid_upside, "active"))
-
-        else:
-            remove_from_hold(t)
-            add_master_log(t, today, "PASS", is_unified=1,
-                           notes=f"Auto-retired from Hold List — Mid Upside fell to {new_mid_upside:.1f}% (below 35% threshold) — {today}")
-            auto_retired_hold.append((t, row["current_price"], new_price, new_mid_upside))
-
-    return {
-        "buy": updated_buy,
-        "hold": updated_hold,
-        "auto_downgraded": auto_downgraded,
-        "auto_upgraded": auto_upgraded,
-        "auto_retired_buy": auto_retired_buy,
-        "auto_retired_hold": auto_retired_hold,
-        "timestamp": today
-    }, None
-
-# ── HARD TRIGGER FLAGS — FULL ENGINE ─────────────────────────────────────────
-# Checks implemented:
-#   1. Price movement +/-20% from baseline              (yfinance)
-#   2. Market cap movement +/-20% from baseline         (yfinance)
-#   3. FCF turned negative — graduated                  (yfinance)
-#      - 1 negative quarter -> Red Flag (immediate review required)
-#      - 2+ consecutive negative quarters -> AUTOMATIC FAIL
-#   4. Revenue deceleration — graduated                 (yfinance)
-#      - 5+ pt drop AND growth below 8% -> AUTOMATIC FAIL
-#      - 5+ pt drop but still >= 8% -> Hard Trigger — deeper review required
-#      - 3-5 pt drop -> Yellow Flag (with critical note if also < 8%)
-#      - < 8% alone, no significant deceleration -> Yellow Flag (Critical note — low growth tier)
-#   5. Leadership change           — SEC 8-K Item 5.02  (EdgarTools — 90-day lookback)
-#   6. Acquisition / merger        — SEC 8-K Item 1.01 / 2.01
-#   7. Regulatory / legal action   — SEC 8-K Item 8.01
-#   8. Guidance cut / withdrawal   — SEC 8-K Item 2.02 / 7.01
-#   9. Share dilution event        — SEC 8-K Item 1.01 / 3.02
-#  10. Debt / credit structure change — SEC 8-K Item 2.03
-# ─────────────────────────────────────────────────────────────────────────────
-
-# 8-K item number -> condition label mapping
-EIGHT_K_TRIGGERS = {
-    "5.02": ("Leadership Change",        "🚩"),
-    "1.01": ("Material Agreement / M&A", "🚩"),
-    "2.01": ("Acquisition / Disposal",   "🚩"),
-    "8.01": ("Regulatory / Legal Action","🚩"),
-    "2.02": ("Guidance / Earnings Event","⚠️"),
-    "7.01": ("Reg FD / Guidance Update", "⚠️"),
-    "3.02": ("Share Dilution Event",     "🚩"),
-    "2.03": ("Debt / Credit Obligation", "🚩"),
-}
-
-def check_8k_triggers(ticker):
-    """
-    Fetches 8-K filings for the last 90 days via EdgarTools (free, no API key).
-    Returns a list of flag strings for any matched trigger items.
-    Falls back gracefully if EdgarTools is unavailable or fetch fails.
-    """
-    if not EDGAR_AVAILABLE:
-        return ["⚠️ EdgarTools not installed — 8-K checks skipped. Run: pip install edgartools"]
-
-    flags = []
-    cutoff = date.today() - timedelta(days=90)
-
-    try:
-        company = Company(ticker)
-        filings = company.get_filings(form="8-K")
-
-        if filings is None:
-            return []
-
-        for filing in filings:
-            try:
-                # Parse filing date
-                filing_date_str = str(filing.filing_date)
-                filing_date = datetime.strptime(filing_date_str[:10], "%Y-%m-%d").date()
-
-                # Only look at filings within 90-day lookback window
-                if filing_date < cutoff:
-                    break  # Filings returned newest-first — safe to stop here
-
-                # Check items listed in the 8-K
-                items_str = str(getattr(filing, "items", "") or "")
-                filing_date_fmt = filing_date.strftime("%b %d, %Y")
-
-                for item_num, (label, emoji) in EIGHT_K_TRIGGERS.items():
-                    if item_num in items_str:
-                        flags.append(
-                            f"{emoji} {ticker} — 8-K Item {item_num}: {label} "
-                            f"detected — Filed {filing_date_fmt} — review 8-K filing"
-                        )
-
-            except Exception:
-                continue
-
-    except Exception:
-        flags.append(f"⚠️ {ticker} — 8-K lookup failed — manual SEC EDGAR check recommended")
-
-    return flags
-
-def store_baseline_snapshot(ticker, price, market_cap):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM price_history WHERE ticker=?", (ticker,))
-    count = c.fetchone()[0]
-    if count == 0:
-        fetched_at = date.today().strftime("%Y-%m-%d")
-        c.execute(
-            "INSERT INTO price_history (ticker, price, market_cap, fetched_at) VALUES (?,?,?,?)",
-            (ticker, price, market_cap, fetched_at)
-        )
-        conn.commit()
-    conn.close()
-
-def fetch_fundamentals_yfinance(ticker):
+def fetch_current_fundamentals(ticker):
     try:
         t = yf.Ticker(ticker)
         info = t.fast_info
+
+        price = None
+        try:
+            price = round(float(info.last_price), 2)
+        except Exception:
+            pass
 
         market_cap = None
         try:
@@ -575,17 +349,22 @@ def fetch_fundamentals_yfinance(ticker):
         except Exception:
             pass
 
+        shares_outstanding = None
+        try:
+            shares_outstanding = float(info.shares)
+        except Exception:
+            pass
+
         fcf_values = []
         try:
             cf = t.quarterly_cashflow
             if cf is not None and not cf.empty:
-                op_cf_row = None
-                capex_row = None
+                op_cf_row = capex_row = None
                 for label in cf.index:
-                    label_lower = str(label).lower()
-                    if "operating" in label_lower and "cash" in label_lower:
+                    ll = str(label).lower()
+                    if "operating" in ll and "cash" in ll:
                         op_cf_row = label
-                    if "capital expenditure" in label_lower or "capex" in label_lower:
+                    if "capital expenditure" in ll or "capex" in ll:
                         capex_row = label
                 if op_cf_row is not None:
                     op_cf = cf.loc[op_cf_row].dropna().values
@@ -604,158 +383,456 @@ def fetch_fundamentals_yfinance(ticker):
             if income is not None and not income.empty:
                 rev_row = None
                 for label in income.index:
-                    label_lower = str(label).lower()
-                    if "total revenue" in label_lower or "revenue" in label_lower:
+                    ll = str(label).lower()
+                    if "total revenue" in ll or "revenue" in ll:
                         rev_row = label
                         break
                 if rev_row is not None:
                     rev_series = income.loc[rev_row].dropna()
                     rev_values = list(reversed([float(v) for v in rev_series.values]))
-                    if len(rev_values) >= 2:
-                        for i in range(1, len(rev_values)):
-                            prior = rev_values[i - 1]
-                            current = rev_values[i]
-                            if prior > 0:
-                                growth_rate = ((current - prior) / prior) * 100
-                                revenue_growth_rates.append(round(growth_rate, 2))
+                    for i in range(1, len(rev_values)):
+                        prior = rev_values[i - 1]
+                        current = rev_values[i]
+                        if prior > 0:
+                            revenue_growth_rates.append(round(((current - prior) / prior) * 100, 2))
         except Exception:
             pass
 
         return {
+            "price": price,
             "market_cap": market_cap,
+            "shares_outstanding": shares_outstanding,
             "fcf_values": fcf_values,
-            "revenue_growth_rates": revenue_growth_rates
+            "revenue_growth_rates": revenue_growth_rates,
         }
-
     except Exception:
         return None
 
-def check_hard_triggers(df_buy, df_hold):
-    flags = []
+# ── WRITE HELPERS ─────────────────────────────────────────────────────────────
+
+def add_or_update_buy(ticker, price, mid_up, mid_ft, inst, date_str, notes):
+    """Genuine re-analysis add/update — resets baseline snapshot."""
+    ticker = ticker.upper().strip()
+    score = round(mid_up / price, 2) if price > 0 else 0
     conn = get_conn()
     c = conn.cursor()
+    c.execute("UPDATE buy_list SET is_new=0")
+    c.execute("""INSERT INTO buy_list
+        (ticker,current_price,mid_upside,mid_fair_target,capital_efficiency_score,
+         institutional_money,date_added,is_new,notes)
+        VALUES (?,?,?,?,?,?,?,1,?)
+        ON CONFLICT(ticker) DO UPDATE SET
+            current_price=excluded.current_price, mid_upside=excluded.mid_upside,
+            mid_fair_target=excluded.mid_fair_target,
+            capital_efficiency_score=excluded.capital_efficiency_score,
+            institutional_money=excluded.institutional_money,
+            date_added=excluded.date_added, is_new=1, notes=excluded.notes""",
+        (ticker, price, mid_up, mid_ft, score, inst, date_str, notes))
+    conn.commit()
+    conn.close()
+    add_master_log(ticker, date_str, "BUY", notes, is_unified=1)
+    if YFINANCE_AVAILABLE:
+        try:
+            f = fetch_current_fundamentals(ticker)
+            if f:
+                reset_baseline_snapshot(ticker, price,
+                                        f.get("market_cap"), f.get("shares_outstanding"))
+        except Exception:
+            pass
 
-    all_tickers_df = pd.concat([df_buy, df_hold], ignore_index=True)
+def add_or_update_hold(ticker, price, mid_up, mid_fe, mid_ft, date_str, notes):
+    """Genuine re-analysis add/update — resets baseline snapshot."""
+    ticker = ticker.upper().strip()
+    score = round(mid_up / mid_fe, 2) if mid_fe > 0 else 0
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("UPDATE hold_list SET is_new=0")
+    c.execute("""INSERT INTO hold_list
+        (ticker,current_price,mid_upside,mid_fair_entry,mid_fair_target,
+         capital_efficiency_score,date_added,is_new,notes)
+        VALUES (?,?,?,?,?,?,?,1,?)
+        ON CONFLICT(ticker) DO UPDATE SET
+            current_price=excluded.current_price, mid_upside=excluded.mid_upside,
+            mid_fair_entry=excluded.mid_fair_entry,
+            mid_fair_target=excluded.mid_fair_target,
+            capital_efficiency_score=excluded.capital_efficiency_score,
+            date_added=excluded.date_added, is_new=1, notes=excluded.notes""",
+        (ticker, price, mid_up, mid_fe, mid_ft, score, date_str, notes))
+    conn.commit()
+    conn.close()
+    add_master_log(ticker, date_str, "HOLD", notes, is_unified=1)
+    if YFINANCE_AVAILABLE:
+        try:
+            f = fetch_current_fundamentals(ticker)
+            if f:
+                reset_baseline_snapshot(ticker, price,
+                                        f.get("market_cap"), f.get("shares_outstanding"))
+        except Exception:
+            pass
+
+def remove_from_buy(ticker):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM buy_list WHERE ticker=?", (ticker.upper(),))
+    conn.commit()
+    conn.close()
+
+def remove_from_hold(ticker):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM hold_list WHERE ticker=?", (ticker.upper(),))
+    conn.commit()
+    conn.close()
+
+def update_price_in_db(table, ticker, new_price, new_score, new_mid_upside=None):
+    """Auto-routing price update only. Does NOT reset baseline snapshot."""
+    conn = get_conn()
+    c = conn.cursor()
+    today = date.today().strftime("%b %d, %Y")
+    if new_mid_upside is not None:
+        c.execute(f"UPDATE {table} SET current_price=?,capital_efficiency_score=?,mid_upside=?,date_added=? WHERE ticker=?",
+                  (new_price, new_score, new_mid_upside, today, ticker))
+    else:
+        c.execute(f"UPDATE {table} SET current_price=?,capital_efficiency_score=?,date_added=? WHERE ticker=?",
+                  (new_price, new_score, today, ticker))
+    conn.commit()
+    conn.close()
+
+# ── 8-K TRIGGER ITEMS ────────────────────────────────────────────────────────
+
+EIGHT_K_TRIGGERS = {
+    "5.02": ("Leadership Change",         "🚩"),
+    "1.01": ("Material Agreement / M&A",  "🚩"),
+    "2.01": ("Acquisition / Disposal",    "🚩"),
+    "8.01": ("Regulatory / Legal Action", "🚩"),
+    "2.02": ("Guidance / Earnings Event", "⚠️"),
+    "7.01": ("Reg FD / Guidance Update",  "⚠️"),
+    "3.02": ("Share Dilution Event",      "🚩"),
+    "2.03": ("Debt / Credit Obligation",  "🚩"),
+}
+
+def check_8k_triggers(ticker):
+    if not EDGAR_AVAILABLE:
+        return ["⚠️ EdgarTools not installed — 8-K checks skipped. Run: pip install edgartools"]
+    flags = []
+    cutoff = date.today() - timedelta(days=90)
+    try:
+        company = Company(ticker)
+        filings = company.get_filings(form="8-K")
+        if filings is None:
+            return []
+        for filing in filings:
+            try:
+                filing_date = datetime.strptime(str(filing.filing_date)[:10], "%Y-%m-%d").date()
+                if filing_date < cutoff:
+                    break
+                items_str = str(getattr(filing, "items", "") or "")
+                filing_date_fmt = filing_date.strftime("%b %d, %Y")
+                for item_num, (label, emoji) in EIGHT_K_TRIGGERS.items():
+                    if item_num in items_str:
+                        flags.append(
+                            f"{emoji} {ticker} — 8-K Item {item_num}: {label} "
+                            f"detected — Filed {filing_date_fmt} — review 8-K filing"
+                        )
+            except Exception:
+                continue
+    except Exception:
+        # Failed lookup = ⚠️ blocked — requires manual SEC EDGAR check
+        flags.append(
+            f"⚠️ {ticker} — 8-K lookup failed — manual SEC EDGAR check required "
+            f"— ticker held pending review"
+        )
+    return flags
+
+# ── HARD TRIGGER GATE — STEP 1 (BLOCKING GATE BEFORE ANY DB WRITES) ──────────
+#
+# Flags implemented:
+#  1.  Price movement ±20% from baseline (anchored to last Unified re-analysis)
+#  2.  Revenue deceleration — graduated ladder
+#  3.  FCF turned negative — graduated
+#  4.  Major leadership change              (8-K Item 5.02)
+#  5.  Share-count-driven market cap ±5%   (REDESIGNED — decoupled from Flag #1)
+#        Expected mktcap = current_price × baseline_shares
+#        Actual mktcap   = current_price × current_shares
+#        Flags when share count change alone causes ≥5% market cap shift
+#  6.  Debt/credit structure change         (8-K Item 2.03)
+#  7.  Acquisition/merger                   (8-K Item 1.01 / 2.01)
+#  8.  Regulatory/legal action              (8-K Item 8.01)
+#  9.  Guidance cut/withdrawal              (8-K Item 2.02 / 7.01)
+# 10.  Share dilution event                 (8-K Item 3.02)
+# 11.  Significant business structure change (surfaced via 8-K review)
+#
+# ⚠️ Failed 8-K lookup = blocked pending manual SEC EDGAR review.
+# Returns: blocked dict { ticker: [flags] }, clear list [ ticker, ... ]
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_hard_trigger_gate(all_tickers_df):
+    blocked = {}
+    clear = []
+    conn = get_conn()
+    c = conn.cursor()
 
     for _, row in all_tickers_df.iterrows():
         t = row["ticker"]
         current_price = row["current_price"]
+        ticker_flags = []
 
-        c.execute(
-            "SELECT price, market_cap FROM price_history WHERE ticker=? ORDER BY fetched_at ASC LIMIT 1",
-            (t,)
-        )
-        baseline_row = c.fetchone()
-        baseline_price  = baseline_row[0] if baseline_row else None
-        baseline_mktcap = baseline_row[1] if baseline_row else None
+        # Pull baseline
+        c.execute("""SELECT price, market_cap, shares_outstanding, baseline_date
+                     FROM price_history WHERE ticker=?""", (t,))
+        bl = c.fetchone()
+        baseline_price  = bl[0] if bl else None
+        baseline_shares = bl[2] if bl else None
+        baseline_date_str = bl[3] if bl else "unknown"
 
-        # ── CHECK 1: PRICE MOVEMENT +/-20% FROM BASELINE ─────────────────
+        # ── Flag #1: Price ±20% from baseline ────────────────────────────────
         if baseline_price and baseline_price > 0:
             pct_move = abs(current_price - baseline_price) / baseline_price * 100
             if pct_move >= 20:
                 direction = "+" if current_price > baseline_price else "-"
-                flags.append(
-                    f"🚩 {t} — Price moved {direction}{pct_move:.1f}% from baseline "
-                    f"(${baseline_price:.2f} -> ${current_price:.2f})"
+                ticker_flags.append(
+                    f"🚩 {t} — Flag #1: Price moved {direction}{pct_move:.1f}% from baseline "
+                    f"(${baseline_price:.2f} on {baseline_date_str} → ${current_price:.2f}) — review required"
                 )
 
-        fundamentals = fetch_fundamentals_yfinance(t)
+        # Fetch fundamentals for flags 2, 3, 5
+        fundamentals = None
+        if YFINANCE_AVAILABLE:
+            fundamentals = fetch_current_fundamentals(t)
+
         if fundamentals is None:
-            flags.append(f"⚠️ {t} — Fundamentals unavailable — manual review required")
+            ticker_flags.append(
+                f"⚠️ {t} — Fundamentals unavailable from yfinance — manual review required"
+            )
         else:
-            current_mktcap = fundamentals["market_cap"]
-            fcf_values     = fundamentals["fcf_values"]
-            rev_growth     = fundamentals["revenue_growth_rates"]
+            current_shares = fundamentals.get("shares_outstanding")
+            fcf_values     = fundamentals.get("fcf_values", [])
+            rev_growth     = fundamentals.get("revenue_growth_rates", [])
 
-            if current_mktcap:
-                store_baseline_snapshot(t, current_price, current_mktcap)
-
-            # ── CHECK 2: MARKET CAP MOVEMENT +/-20% FROM BASELINE ────────
-            if baseline_mktcap and baseline_mktcap > 0 and current_mktcap:
-                mktcap_move = abs(current_mktcap - baseline_mktcap) / baseline_mktcap * 100
-                if mktcap_move >= 20:
-                    direction = "+" if current_mktcap > baseline_mktcap else "-"
-                    flags.append(
-                        f"🚩 {t} — Market cap moved {direction}{mktcap_move:.1f}% from baseline"
-                    )
-
-            # ── CHECK 3: FCF TURNED NEGATIVE — GRADUATED ─────────────────
-            if fcf_values:
-                most_recent_fcf = fcf_values[0]
-                if most_recent_fcf < 0:
-                    if len(fcf_values) >= 2 and fcf_values[1] < 0:
-                        flags.append(
-                            f"🚩 {t} — FCF NEGATIVE 2+ CONSECUTIVE QUARTERS "
-                            f"(most recent: ${most_recent_fcf / 1e6:.1f}M | "
-                            f"prior: ${fcf_values[1] / 1e6:.1f}M) — AUTOMATIC FAIL"
-                        )
-                    else:
-                        flags.append(
-                            f"🚩 {t} — FCF NEGATIVE (most recent quarter: "
-                            f"${most_recent_fcf / 1e6:.1f}M) — immediate review required"
-                        )
-
-            # ── CHECK 4: REVENUE DECELERATION — GRADUATED ────────────────
+            # ── Flag #2: Revenue deceleration ladder ──────────────────────────
             if len(rev_growth) >= 2:
-                latest_rate    = rev_growth[-1]
-                previous_rate  = rev_growth[-2]
-                deceleration   = previous_rate - latest_rate
-                below_critical = latest_rate < 8.0
+                latest   = rev_growth[-1]
+                previous = rev_growth[-2]
+                decel    = previous - latest
+                below8   = latest < 8.0
+                consec   = len(rev_growth) >= 3 and (rev_growth[-2] - rev_growth[-3]) > 0
+                cn       = " (2+ consecutive periods)" if consec else ""
 
-                # AUTOMATIC FAIL: 5+ pt drop AND below 8% — both conditions met
-                if deceleration >= 5.0 and below_critical:
-                    consecutive = False
-                    if len(rev_growth) >= 3:
-                        prior_decel = rev_growth[-2] - rev_growth[-3]
-                        if prior_decel > 0:
-                            consecutive = True
-                    consec_note = " (2+ consecutive periods)" if consecutive else ""
-                    flags.append(
-                        f"🚩 {t} — Revenue deceleration{consec_note}: "
-                        f"{previous_rate:.1f}% -> {latest_rate:.1f}% YoY "
-                        f"({deceleration:.1f}pt drop) — BELOW 8% CRITICAL THRESHOLD — AUTOMATIC FAIL"
+                if decel >= 5.0 and below8:
+                    ticker_flags.append(
+                        f"🚩 {t} — Flag #2: Revenue deceleration{cn}: "
+                        f"{previous:.1f}% → {latest:.1f}% YoY ({decel:.1f}pt drop) "
+                        f"— BELOW 8% CRITICAL THRESHOLD — AUTOMATIC FAIL"
                     )
-
-                # 5+ pt drop but still >= 8% -> Hard Trigger — deeper review required
-                elif deceleration >= 5.0 and not below_critical:
-                    consecutive = False
-                    if len(rev_growth) >= 3:
-                        prior_decel = rev_growth[-2] - rev_growth[-3]
-                        if prior_decel > 0:
-                            consecutive = True
-                    consec_note = " (2+ consecutive periods)" if consecutive else ""
-                    flags.append(
-                        f"🚩 {t} — Revenue deceleration{consec_note}: "
-                        f"{previous_rate:.1f}% -> {latest_rate:.1f}% YoY "
-                        f"({deceleration:.1f}pt drop) — Hard Trigger — deeper review required"
+                elif decel >= 5.0:
+                    ticker_flags.append(
+                        f"🚩 {t} — Flag #2: Revenue deceleration{cn}: "
+                        f"{previous:.1f}% → {latest:.1f}% YoY ({decel:.1f}pt drop) "
+                        f"— Hard Trigger — deeper review required"
                     )
-
-                # 3-5 pt drop -> Yellow Flag (with critical note if also < 8%)
-                elif 3.0 <= deceleration < 5.0:
-                    critical_note = " — CRITICAL NOTE: also below 8% low growth tier" if below_critical else ""
-                    flags.append(
-                        f"⚠️ {t} — Yellow Flag: Mild revenue deceleration: "
-                        f"{previous_rate:.1f}% -> {latest_rate:.1f}% YoY "
-                        f"({deceleration:.1f}pt drop) — deeper review recommended{critical_note}"
+                elif 3.0 <= decel < 5.0:
+                    crit = " — CRITICAL NOTE: also below 8% low growth tier" if below8 else ""
+                    ticker_flags.append(
+                        f"⚠️ {t} — Flag #2: Yellow Flag — mild revenue deceleration: "
+                        f"{previous:.1f}% → {latest:.1f}% YoY ({decel:.1f}pt drop){crit}"
                     )
-
-                # < 8% alone, no significant deceleration -> Yellow Flag (Critical note — low growth tier)
-                elif below_critical and deceleration >= 0:
-                    flags.append(
-                        f"⚠️ {t} — Yellow Flag: Revenue growth at {latest_rate:.1f}% "
+                elif below8 and decel >= 0:
+                    ticker_flags.append(
+                        f"⚠️ {t} — Flag #2: Yellow Flag — revenue growth at {latest:.1f}% "
                         f"— Critical note: low growth tier (below 8% threshold)"
                     )
 
-        # ── CHECKS 5-10: SEC 8-K MATERIAL EVENT MONITOR (90-day lookback) ─
-        eight_k_flags = check_8k_triggers(t)
-        flags.extend(eight_k_flags)
+            # ── Flag #3: FCF negative — graduated ────────────────────────────
+            if fcf_values:
+                mrq = fcf_values[0]
+                if mrq < 0:
+                    if len(fcf_values) >= 2 and fcf_values[1] < 0:
+                        ticker_flags.append(
+                            f"🚩 {t} — Flag #3: FCF NEGATIVE 2+ CONSECUTIVE QUARTERS "
+                            f"(most recent: ${mrq/1e6:.1f}M | prior: ${fcf_values[1]/1e6:.1f}M) "
+                            f"— AUTOMATIC FAIL"
+                        )
+                    else:
+                        ticker_flags.append(
+                            f"🚩 {t} — Flag #3: FCF NEGATIVE "
+                            f"(most recent quarter: ${mrq/1e6:.1f}M) — immediate review required"
+                        )
+
+            # ── Flag #5 (REDESIGNED): Share-count-driven market cap ±5% ──────
+            # Holds price constant — isolates dilution / buyback events only.
+            # Fully decoupled from Flag #1 (price movement).
+            if baseline_shares and baseline_shares > 0 and current_shares and current_shares > 0:
+                expected_mktcap = current_price * baseline_shares
+                actual_mktcap   = current_price * current_shares
+                share_pct = (actual_mktcap - expected_mktcap) / expected_mktcap * 100
+                if abs(share_pct) >= 5.0:
+                    if share_pct > 0:
+                        ticker_flags.append(
+                            f"🚩 {t} — Flag #5: Share count increased {share_pct:.1f}% since baseline "
+                            f"(baseline: {baseline_shares/1e6:.1f}M → current: {current_shares/1e6:.1f}M) "
+                            f"— potential dilution event — review required"
+                        )
+                    else:
+                        ticker_flags.append(
+                            f"✅ {t} — Flag #5: Share count decreased {abs(share_pct):.1f}% since baseline "
+                            f"(baseline: {baseline_shares/1e6:.1f}M → current: {current_shares/1e6:.1f}M) "
+                            f"— significant buyback — noted"
+                        )
+
+        # ── Flags 4, 6–11: SEC 8-K (90-day lookback) ─────────────────────────
+        ticker_flags.extend(check_8k_triggers(t))
+
+        # ── Gate decision ─────────────────────────────────────────────────────
+        if ticker_flags:
+            blocked[t] = ticker_flags
+        else:
+            clear.append(t)
 
     conn.close()
-    return flags
+    return blocked, clear
+
+# ── MAIN MARKET DATA UPDATE ───────────────────────────────────────────────────
+#
+# NEW EXECUTION ORDER:
+#  Step 1 — Hard Trigger Gate (ALL tickers) — no DB writes yet
+#  Step 2 — Fetch prices (✅ All Clear tickers only)
+#  Steps 3-6 — Mid Upside recalc → 3-tier routing → CE Score → DB writes
+#              (✅ All Clear tickers only)
+#
+# Blocked tickers: frozen in current position, zero DB writes, surfaced in UI.
+# Auto-routing tier changes do NOT reset baseline snapshot.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_market_data_update():
+    buy_df  = get_buy_list()
+    hold_df = get_hold_list()
+    if not YFINANCE_AVAILABLE:
+        return None, "yfinance not installed."
+
+    today  = date.today().strftime("%b %d, %Y")
+    all_df = pd.concat([buy_df, hold_df], ignore_index=True)
+
+    # Step 1 — Hard Trigger Gate
+    blocked, clear_tickers = run_hard_trigger_gate(all_df)
+
+    # Step 2 — Fetch prices for clear tickers only
+    prices = {}
+    for t in clear_tickers:
+        try:
+            prices[t] = round(float(yf.Ticker(t).fast_info.last_price), 2)
+        except Exception:
+            prices[t] = None
+
+    # Steps 3-6 — Routing + writes for clear tickers only
+    updated_buy = []
+    updated_hold = []
+    auto_downgraded = []
+    auto_upgraded = []
+    auto_retired_buy = []
+    auto_retired_hold = []
+
+    for _, row in buy_df.iterrows():
+        t = row["ticker"]
+        if t in blocked:
+            continue
+        new_price = prices.get(t)
+        if not new_price:
+            updated_buy.append((t, row["current_price"], None, row["mid_upside"], "unchanged"))
+            continue
+        mid_ft = row["mid_fair_target"]
+        new_mid_up = round((mid_ft - new_price) / new_price * 100, 2) if new_price > 0 and mid_ft > 0 else row["mid_upside"]
+
+        if new_mid_up >= 50.0:
+            update_price_in_db("buy_list", t, new_price, round(new_mid_up / new_price, 2), new_mid_up)
+            updated_buy.append((t, row["current_price"], new_price, new_mid_up, "active"))
+        elif new_mid_up >= 35.0:
+            mid_fe_new = round(mid_ft / 1.5, 2)
+            remove_from_buy(t)
+            score = round(new_mid_up / mid_fe_new, 2) if mid_fe_new > 0 else 0
+            conn = get_conn()
+            cc = conn.cursor()
+            cc.execute("UPDATE hold_list SET is_new=0")
+            cc.execute("""INSERT INTO hold_list
+                (ticker,current_price,mid_upside,mid_fair_entry,mid_fair_target,
+                 capital_efficiency_score,date_added,is_new,notes)
+                VALUES (?,?,?,?,?,?,?,1,?)
+                ON CONFLICT(ticker) DO UPDATE SET
+                    current_price=excluded.current_price,mid_upside=excluded.mid_upside,
+                    mid_fair_entry=excluded.mid_fair_entry,mid_fair_target=excluded.mid_fair_target,
+                    capital_efficiency_score=excluded.capital_efficiency_score,
+                    date_added=excluded.date_added,is_new=1,notes=excluded.notes""",
+                (t.upper(), new_price, new_mid_up, mid_fe_new, mid_ft, score, today,
+                 f"Auto-downgraded from Buy List — Mid Upside compressed to {new_mid_up:.1f}% — {today}"))
+            conn.commit()
+            conn.close()
+            add_master_log(t, today, "HOLD", is_unified=1,
+                           notes=f"Auto-downgraded from Buy List — Mid Upside compressed to {new_mid_up:.1f}% — {today}")
+            auto_downgraded.append((t, row["current_price"], new_price, new_mid_up, mid_fe_new))
+        else:
+            remove_from_buy(t)
+            add_master_log(t, today, "PASS", is_unified=1,
+                           notes=f"Auto-retired from Buy List — Mid Upside fell to {new_mid_up:.1f}% (below 35%) — {today}")
+            auto_retired_buy.append((t, row["current_price"], new_price, new_mid_up))
+
+    for _, row in hold_df.iterrows():
+        t = row["ticker"]
+        if t in blocked:
+            continue
+        new_price = prices.get(t)
+        if not new_price:
+            updated_hold.append((t, row["current_price"], None, row["mid_upside"], "unchanged"))
+            continue
+        mid_ft = row["mid_fair_target"]
+        new_mid_up = round((mid_ft - new_price) / new_price * 100, 2) if new_price > 0 and mid_ft > 0 else row["mid_upside"]
+
+        if new_mid_up >= 50.0:
+            remove_from_hold(t)
+            score = round(new_mid_up / new_price, 2)
+            conn = get_conn()
+            cc = conn.cursor()
+            cc.execute("UPDATE buy_list SET is_new=0")
+            cc.execute("""INSERT INTO buy_list
+                (ticker,current_price,mid_upside,mid_fair_target,capital_efficiency_score,
+                 institutional_money,date_added,is_new,notes)
+                VALUES (?,?,?,?,?,?,?,1,?)
+                ON CONFLICT(ticker) DO UPDATE SET
+                    current_price=excluded.current_price,mid_upside=excluded.mid_upside,
+                    mid_fair_target=excluded.mid_fair_target,
+                    capital_efficiency_score=excluded.capital_efficiency_score,
+                    institutional_money=excluded.institutional_money,
+                    date_added=excluded.date_added,is_new=1,notes=excluded.notes""",
+                (t.upper(), new_price, new_mid_up, mid_ft, score, "Pending", today,
+                 f"Auto-upgraded from Hold List — Mid Upside reached {new_mid_up:.1f}% — {today}"))
+            conn.commit()
+            conn.close()
+            add_master_log(t, today, "BUY", is_unified=1,
+                           notes=f"Auto-upgraded from Hold List — Mid Upside reached {new_mid_up:.1f}% — {today}")
+            auto_upgraded.append((t, row["current_price"], new_price, new_mid_up))
+        elif new_mid_up >= 35.0:
+            mid_fe_new = round(mid_ft / 1.5, 2)
+            new_score  = round(new_mid_up / mid_fe_new, 2) if mid_fe_new > 0 else 0
+            update_price_in_db("hold_list", t, new_price, new_score, new_mid_up)
+            conn = get_conn()
+            cc = conn.cursor()
+            cc.execute("UPDATE hold_list SET mid_fair_entry=? WHERE ticker=?", (mid_fe_new, t))
+            conn.commit()
+            conn.close()
+            updated_hold.append((t, row["current_price"], new_price, new_mid_up, "active"))
+        else:
+            remove_from_hold(t)
+            add_master_log(t, today, "PASS", is_unified=1,
+                           notes=f"Auto-retired from Hold List — Mid Upside fell to {new_mid_up:.1f}% (below 35%) — {today}")
+            auto_retired_hold.append((t, row["current_price"], new_price, new_mid_up))
+
+    return {
+        "buy": updated_buy, "hold": updated_hold,
+        "auto_downgraded": auto_downgraded, "auto_upgraded": auto_upgraded,
+        "auto_retired_buy": auto_retired_buy, "auto_retired_hold": auto_retired_hold,
+        "blocked": blocked, "timestamp": today,
+    }, None
 
 # ── STARTUP ───────────────────────────────────────────────────────────────────
 init_db()
-init_db_market_cap_baseline()
 if not is_seeded():
     seed_v55()
 
@@ -769,15 +846,17 @@ with st.sidebar:
          "Ticker Lookup", "Add / Update", "Market Data Updates"],
         label_visibility="collapsed")
     st.markdown("---")
-    buy_count = len(get_buy_list())
+    buy_count  = len(get_buy_list())
     hold_count = len(get_hold_list())
-    log_count = len(get_master_log())
+    log_count  = len(get_master_log())
     st.markdown(f'<p class="mono" style="color:#3ddc84;">Buy: {buy_count}</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="mono" style="color:#ffc947;">Hold: {hold_count}</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="mono" style="color:#2a7fff;">Log: {log_count}</p>', unsafe_allow_html=True)
     st.markdown("---")
     st.markdown('<p class="mono" style="color:#e8e4d9; font-size:0.72rem; font-weight:600;">Fundamentals first. Always.</p>', unsafe_allow_html=True)
     st.markdown('<p class="mono" style="color:#e8e4d9; font-size:0.72rem; font-weight:600;">We are not desperate. We wait. 🐟</p>', unsafe_allow_html=True)
+
+# ── PAGES ─────────────────────────────────────────────────────────────────────
 
 if page == "Dashboard":
     st.markdown('<div class="header-block" style="border-left:7px solid #2a7fff;"><h1 style="color:#2a7fff;">Investment Analysis System</h1><p class="mono" style="color:#8899aa;">Unified 7 Points Standards | V55 | Dream Team</p></div>', unsafe_allow_html=True)
@@ -808,8 +887,7 @@ if page == "Dashboard":
                 f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#3ddc84;">{row["mid_upside"]:.1f}%</span>'
                 f'&nbsp;&nbsp;&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#3ddc84;">${row["mid_fair_target"]:.2f}</span>'
                 f'&nbsp;&nbsp;&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#3ddc84;">{row["capital_efficiency_score"]:.2f}</em>'
-                f'</span></div>',
-                unsafe_allow_html=True)
+                f'</span></div>', unsafe_allow_html=True)
     with col_h:
         st.markdown("#### :orange[Hold List — Ranked by Efficiency]")
         hold_df = get_hold_list()
@@ -824,8 +902,7 @@ if page == "Dashboard":
                 f'&nbsp;&nbsp;&nbsp;<span style="color:#e8e4d9;">Entry: </span><span style="color:#ffc947;">${row["mid_fair_entry"]:.2f}</span>'
                 f'&nbsp;&nbsp;&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#ffc947;">${row["mid_fair_target"]:.2f}</span>'
                 f'&nbsp;&nbsp;&nbsp;<span style="color:#e8e4d9;">Score: </span><em style="color:#ffc947;">{row["capital_efficiency_score"]:.2f}</em>'
-                f'</span></div>',
-                unsafe_allow_html=True)
+                f'</span></div>', unsafe_allow_html=True)
 
 elif page == "Buy List":
     st.markdown('<div class="header-block" style="border-left:7px solid #3ddc84;"><h1 style="color:#3ddc84;">Buy List</h1><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Current Price)</p></div>', unsafe_allow_html=True)
@@ -839,17 +916,15 @@ elif page == "Buy List":
                 f'<div style="display:flex; justify-content:space-between;">'
                 f'<div><span style="font-family:JetBrains Mono,monospace; font-weight:700; font-size:1.15rem; color:#e8e4d9;">{row["ticker"]}</span>'
                 f'<span style="color:#3ddc84;">{"&nbsp;<em>← NEW</em>" if row["is_new"] else ""}</span> &nbsp;<span class="mono" style="color:#3ddc84;">BUY</span></div>'
-                f'<div class="mono" style="color:#e8e4d9; font-size:0.78rem;">{row["date_added"]}</div>'
-                f'</div>'
+                f'<div class="mono" style="color:#e8e4d9; font-size:0.78rem;">{row["date_added"]}</div></div>'
                 f'<div style="margin-top:0.8rem; display:flex; gap:2.8rem; flex-wrap:wrap;">'
                 f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">CURRENT PRICE</p><p class="mono" style="color:#e8e4d9; margin:0;">${row["current_price"]:.2f}</p></div>'
                 f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">MID UPSIDE</p><p class="mono" style="color:#3ddc84; margin:0;">{row["mid_upside"]:.1f}%</p></div>'
                 f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">MID FAIR TARGET</p><p class="mono" style="color:#3ddc84; margin:0;">${row["mid_fair_target"]:.2f}</p></div>'
                 f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">CE SCORE</p><p class="mono" style="color:#3ddc84; margin:0; font-style:italic;">{row["capital_efficiency_score"]:.2f}</p></div>'
                 f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">INSTITUTIONAL $</p><p class="mono" style="color:#e8e4d9; margin:0;">{row["institutional_money"]}</p></div>'
-                f'</div></div>',
-                unsafe_allow_html=True)
-        st.markdown(f'<p class="mono" style="color:#3ddc84;">Total: {len(buy_df)} tickers | Hard Trigger Flags: All Clear</p>', unsafe_allow_html=True)
+                f'</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<p class="mono" style="color:#3ddc84;">Total: {len(buy_df)} tickers</p>', unsafe_allow_html=True)
 
 elif page == "Hold List":
     st.markdown('<div class="header-block" style="border-left:7px solid #ffc947;"><h1 style="color:#ffc947;">Hold List</h1><p class="mono" style="color:#8899aa;">Ranked by Capital Efficiency Score (Mid Upside% / Mid Fair Entry)</p></div>', unsafe_allow_html=True)
@@ -863,20 +938,18 @@ elif page == "Hold List":
                 f'<div style="display:flex; justify-content:space-between;">'
                 f'<div><span style="font-family:JetBrains Mono,monospace; font-weight:700; font-size:1.15rem; color:#e8e4d9;">{row["ticker"]}</span>'
                 f'<span style="color:#ffc947;">{"&nbsp;<em>← NEW</em>" if row["is_new"] else ""}</span> &nbsp;<span class="mono" style="color:#ffc947;">HOLD</span></div>'
-                f'<div class="mono" style="color:#e8e4d9; font-size:0.78rem;">{row["date_added"]}</div>'
-                f'</div>'
+                f'<div class="mono" style="color:#e8e4d9; font-size:0.78rem;">{row["date_added"]}</div></div>'
                 f'<div style="margin-top:0.8rem; display:flex; gap:2.8rem; flex-wrap:wrap;">'
                 f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">CURRENT PRICE</p><p class="mono" style="color:#e8e4d9; margin:0;">${row["current_price"]:.2f}</p></div>'
                 f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">MID UPSIDE</p><p class="mono" style="color:#ffc947; margin:0;">{row["mid_upside"]:.1f}%</p></div>'
                 f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">MID FAIR ENTRY</p><p class="mono" style="color:#ffc947; margin:0;">${row["mid_fair_entry"]:.2f}</p></div>'
                 f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">MID FAIR TARGET</p><p class="mono" style="color:#ffc947; margin:0;">${row["mid_fair_target"]:.2f}</p></div>'
                 f'<div><p class="mono" style="color:#e8e4d9; margin:0; font-size:0.72rem;">CE SCORE</p><p class="mono" style="color:#ffc947; margin:0; font-style:italic;">{row["capital_efficiency_score"]:.2f}</p></div>'
-                f'</div></div>',
-                unsafe_allow_html=True)
-        st.markdown(f'<p class="mono" style="color:#ffc947;">Total: {len(hold_df)} tickers | Hard Trigger Flags: All Clear</p>', unsafe_allow_html=True)
+                f'</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<p class="mono" style="color:#ffc947;">Total: {len(hold_df)} tickers</p>', unsafe_allow_html=True)
 
 elif page == "Master Log":
-    st.markdown('<div class="header-block" style="border-left:7px solid #2a7fff;"><h1 style="color:#2a7fff;">Master Consolidated Log</h1><p class="mono" style="color:#8899aa;">Cross-reference every ticker here first. All sessions. All verdicts.</p><p class="mono" style="color:#555e6e; font-size:0.78rem;">Full brightness = post-Unified (Unified 7 Points) &nbsp;|&nbsp; Muted = pre-Unified (legacy standard)</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block" style="border-left:7px solid #2a7fff;"><h1 style="color:#2a7fff;">Master Consolidated Log</h1><p class="mono" style="color:#8899aa;">Cross-reference every ticker here first. All sessions. All verdicts.</p><p class="mono" style="color:#555e6e; font-size:0.78rem;">Full brightness = post-Unified &nbsp;|&nbsp; Muted = pre-Unified (legacy standard)</p></div>', unsafe_allow_html=True)
     col_filter, col_search = st.columns([2, 3])
     with col_filter:
         verdict_filter = st.selectbox("Filter by Verdict", ["ALL", "BUY", "HOLD", "PASS", "HARD_PASS"])
@@ -904,8 +977,7 @@ elif page == "Master Log":
             ticker_col = "#e8e4d9" if is_unified else "#4a5568"
             date_col   = "#8899aa" if is_unified else "#3a4252"
             badge      = verdict_badge_html(v, is_unified)
-            st.markdown(
-                log_record_row(is_unified, border_col, ticker_col, date_col,
+            st.markdown(log_record_row(is_unified, border_col, ticker_col, date_col,
                                row["id"], row["ticker"], row["date_analyzed"], badge, row["next_review"]),
                 unsafe_allow_html=True)
 
@@ -932,12 +1004,10 @@ elif page == "Ticker Lookup":
                 f'<div style="display:flex; align-items:center; gap:0.8rem; margin-bottom:0.5rem;">'
                 f'<span class="mono" style="color:#555e6e; font-size:0.72rem;">#{row_id}</span>'
                 f'<h3 style="color:{ticker_col}; font-family:JetBrains Mono,monospace; margin:0;">{ticker_input} — {labels.get(verdict, verdict)}</h3>'
-                f'</div>'
-                f'<div style="margin-bottom:0.4rem;">{badge_html}</div>'
+                f'</div><div style="margin-bottom:0.4rem;">{badge_html}</div>'
                 f'<p class="mono" style="color:{date_col}; margin:0.3rem 0;">Date analyzed: {dt}</p>'
                 f'<p class="mono" style="color:{border_col}; margin:0.3rem 0;">{actions.get(verdict, "")}</p>'
-                f'{notes_html}</div>',
-                unsafe_allow_html=True)
+                f'{notes_html}</div>', unsafe_allow_html=True)
         else:
             st.markdown(
                 f'<div class="metric-card" style="border-left:7px solid #2a7fff;">'
@@ -947,7 +1017,7 @@ elif page == "Ticker Lookup":
                 unsafe_allow_html=True)
 
 elif page == "Add / Update":
-    st.markdown('<div class="header-block" style="border-left:7px solid #2a7fff;"><h1 style="color:#2a7fff;">Add / Update Ticker</h1><p class="mono" style="color:#8899aa;">HANDOFF line — auto-logs to correct table with Capital Efficiency Score.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block" style="border-left:7px solid #2a7fff;"><h1 style="color:#2a7fff;">Add / Update Ticker</h1><p class="mono" style="color:#8899aa;">HANDOFF line — auto-logs to correct table with Capital Efficiency Score. Resets baseline snapshot on BUY/HOLD entries.</p></div>', unsafe_allow_html=True)
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["Add to Buy List", "Add to Hold List", "Log PASS / HARD PASS", "Re-evaluate / Update Verdict", "Remove Ticker"])
 
     with tab1:
@@ -973,7 +1043,7 @@ elif page == "Add / Update":
                 else:
                     add_or_update_buy(b_ticker, b_price, b_mid_up, b_mid_ft, b_inst, b_date, b_notes)
                     score = round(b_mid_up / b_price, 2)
-                    st.success(f"{b_ticker} added to Buy List — CE Score: {score:.2f} — Mid Fair Target: ${b_mid_ft:.2f}")
+                    st.success(f"{b_ticker} added to Buy List — CE Score: {score:.2f} — Mid Fair Target: ${b_mid_ft:.2f} — Baseline snapshot reset ✅")
 
     with tab2:
         st.markdown("#### Add / Update — Hold List")
@@ -994,7 +1064,7 @@ elif page == "Add / Update":
                 else:
                     add_or_update_hold(h_ticker, h_price, h_mid_up, h_mid_fe, h_mid_ft, h_date, h_notes)
                     score = round(h_mid_up / h_mid_fe, 2)
-                    st.success(f"{h_ticker} added to Hold List — CE Score: {score:.2f} — Mid Fair Entry: ${h_mid_fe:.2f} — Mid Fair Target: ${h_mid_ft:.2f}")
+                    st.success(f"{h_ticker} added to Hold List — CE Score: {score:.2f} — Mid Fair Entry: ${h_mid_fe:.2f} — Mid Fair Target: ${h_mid_ft:.2f} — Baseline snapshot reset ✅")
 
     with tab3:
         st.markdown("#### Log PASS or HARD PASS")
@@ -1012,7 +1082,7 @@ elif page == "Add / Update":
 
     with tab4:
         st.markdown("#### Re-evaluate / Update Verdict")
-        st.markdown('<p class="mono" style="color:#8899aa; font-size:0.83rem;">A new verdict updates the Master Log in place — history replaced, current reality reflected. If BUY or HOLD, fill in the active list fields below.</p>', unsafe_allow_html=True)
+        st.markdown('<p class="mono" style="color:#8899aa; font-size:0.83rem;">A new verdict updates the Master Log in place. If BUY or HOLD, baseline snapshot resets automatically.</p>', unsafe_allow_html=True)
         with st.form("re_eval_form"):
             re_ticker  = st.text_input("Ticker Symbol *").upper().strip()
             re_verdict = st.selectbox("New Verdict", ["BUY", "HOLD", "PASS", "HARD_PASS"])
@@ -1037,11 +1107,11 @@ elif page == "Add / Update":
                     if re_verdict == "BUY":
                         add_or_update_buy(re_ticker, re_price, re_mid_up, re_mid_ft, re_inst, re_date, re_notes)
                         score = round(re_mid_up / re_price, 2)
-                        st.success(f"✅ {re_ticker} → BUY | Added to Buy List | CE Score: {score:.2f} | Mid Fair Target: ${re_mid_ft:.2f} | Master Log updated.")
+                        st.success(f"✅ {re_ticker} → BUY | CE Score: {score:.2f} | Mid Fair Target: ${re_mid_ft:.2f} | Baseline reset ✅")
                     elif re_verdict == "HOLD":
                         add_or_update_hold(re_ticker, re_price, re_mid_up, re_mid_fe, re_mid_ft, re_date, re_notes)
                         score = round(re_mid_up / re_mid_fe, 2)
-                        st.success(f"⚠️ {re_ticker} → HOLD | Added to Hold List | CE Score: {score:.2f} | Mid Fair Target: ${re_mid_ft:.2f} | Master Log updated.")
+                        st.success(f"⚠️ {re_ticker} → HOLD | CE Score: {score:.2f} | Mid Fair Target: ${re_mid_ft:.2f} | Baseline reset ✅")
                     elif re_verdict == "PASS":
                         add_master_log(re_ticker, re_date, "PASS", re_notes, is_unified=1)
                         st.success(f"❌ {re_ticker} → PASS | Master Log updated.")
@@ -1077,7 +1147,7 @@ elif page == "Add / Update":
             if d_id and d_confirm:
                 conn = get_conn()
                 c = conn.cursor()
-                c.execute("SELECT ticker, verdict, date_analyzed FROM master_log WHERE id=?", (int(d_id),))
+                c.execute("SELECT ticker,verdict,date_analyzed FROM master_log WHERE id=?", (int(d_id),))
                 row = c.fetchone()
                 if row and row[0] == d_confirm:
                     c.execute("DELETE FROM master_log WHERE id=?", (int(d_id),))
@@ -1093,8 +1163,11 @@ elif page == "Market Data Updates":
     st.markdown(
         '<div class="header-block" style="border-left:7px solid #2a7fff;">'
         '<h1 style="color:#2a7fff;">Market Data Updates</h1>'
-        '<p class="mono" style="color:#8899aa; font-size:0.72rem;">Refreshes prices, recalculates CE Scores, checks Hard Trigger Flags (yfinance + SEC 8-K).</p>'
-        '</div>', unsafe_allow_html=True)
+        '<p class="mono" style="color:#8899aa; font-size:0.72rem;">'
+        'Step 1: Hard Trigger Gate screens ALL tickers before any DB writes. '
+        'Steps 2+: Price refresh + CE Score recalc + 3-tier routing — ✅ All Clear tickers only.'
+        '</p></div>', unsafe_allow_html=True)
+
     if not YFINANCE_AVAILABLE:
         st.error("yfinance not installed. Run: pip install yfinance")
     else:
@@ -1104,86 +1177,39 @@ elif page == "Market Data Updates":
     else:
         st.markdown('<p class="mono" style="color:#3ddc84; font-size:0.72rem;">EdgarTools available ✅ — SEC 8-K monitor active (90-day lookback)</p>', unsafe_allow_html=True)
 
-    col_a, col_b = st.columns([4, 5])
-
     def buy_html_table(df):
-        hdr = "background:#0a1f10; color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #3ddc84;"
-        c_ticker  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.5rem; border-bottom:1px solid #1a2a1a; width:14%;"
-        c_price   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.5rem; border-bottom:1px solid #1a2a1a; width:15%;"
-        c_narrow  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.3rem; border-bottom:1px solid #1a2a1a; width:18%;"
-        c_score   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #1a2a1a; width:13%;"
-        c_date    = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.8rem; border-bottom:1px solid #1a2a1a; width:20%;"
-        hdr_ticker = hdr + " width:14%;"
-        hdr_price  = hdr + " width:15%;"
-        hdr_narrow = hdr + " width:18%;"
-        hdr_score  = hdr + " width:13%;"
-        hdr_date   = hdr + " width:20%;"
-        rows = ""
-        for _, r in df.iterrows():
-            rows += (
-                f'<tr>'
-                f'<td style="{c_ticker}">{r["ticker"]}</td>'
-                f'<td style="{c_price}">${r["current_price"]:.2f}</td>'
-                f'<td style="{c_narrow}">{r["mid_upside"]:.1f}%</td>'
-                f'<td style="{c_narrow}">${r["mid_fair_target"]:.2f}</td>'
-                f'<td style="{c_score}"><em>{r["capital_efficiency_score"]:.2f}</em></td>'
-                f'<td style="{c_date}">{r["date_added"]}</td>'
-                f'</tr>'
-            )
-        return (
-            f'<div style="border:3px solid #3ddc84; border-left:7px solid #3ddc84; border-radius:5px; overflow:hidden;">'
-            f'<table style="width:100%; border-collapse:collapse; background:#0d0f14; table-layout:fixed;">'
-            f'<thead><tr>'
-            f'<th style="{hdr_ticker}">Ticker</th>'
-            f'<th style="{hdr_price}">Price</th>'
-            f'<th style="{hdr_narrow}">Mid Upside %</th>'
-            f'<th style="{hdr_narrow}">Mid Fair Target</th>'
-            f'<th style="{hdr_score}">CE Score</th>'
-            f'<th style="{hdr_date}">Date</th>'
-            f'</tr></thead>'
-            f'<tbody>{rows}</tbody>'
-            f'</table></div>'
+        hdr  = "background:#0a1f10; color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #3ddc84;"
+        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.5rem; border-bottom:1px solid #1a2a1a;"
+        rows = "".join(
+            f'<tr><td style="{cell}">{r["ticker"]}</td><td style="{cell}">${r["current_price"]:.2f}</td>'
+            f'<td style="{cell}">{r["mid_upside"]:.1f}%</td><td style="{cell}">${r["mid_fair_target"]:.2f}</td>'
+            f'<td style="{cell}"><em>{r["capital_efficiency_score"]:.2f}</em></td><td style="{cell}">{r["date_added"]}</td></tr>'
+            for _, r in df.iterrows()
         )
+        return (f'<div style="border:3px solid #3ddc84; border-left:7px solid #3ddc84; border-radius:5px; overflow:hidden;">'
+                f'<table style="width:100%; border-collapse:collapse; background:#0d0f14;">'
+                f'<thead><tr><th style="{hdr}">Ticker</th><th style="{hdr}">Price</th>'
+                f'<th style="{hdr}">Mid Upside %</th><th style="{hdr}">Mid Fair Target</th>'
+                f'<th style="{hdr}">CE Score</th><th style="{hdr}">Date</th></tr></thead>'
+                f'<tbody>{rows}</tbody></table></div>')
 
     def hold_html_table(df):
-        hdr = "background:#2b2200; color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #ffc947;"
-        c_ticker  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000; width:15%;"
-        c_price   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000; width:18%;"
-        c_upside  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000; width:18%;"
-        c_narrow  = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000; width:18%;"
-        c_score   = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000; width:13%;"
-        hdr_ticker = hdr + " width:15%;"
-        hdr_price  = hdr + " width:18%;"
-        hdr_upside = hdr + " width:18%;"
-        hdr_narrow = hdr + " width:18%;"
-        hdr_score  = hdr + " width:13%;"
-        rows = ""
-        for _, r in df.iterrows():
-            rows += (
-                f'<tr>'
-                f'<td style="{c_ticker}">{r["ticker"]}</td>'
-                f'<td style="{c_price}">${r["current_price"]:.2f}</td>'
-                f'<td style="{c_upside}">{r["mid_upside"]:.1f}%</td>'
-                f'<td style="{c_narrow}">${r["mid_fair_entry"]:.2f}</td>'
-                f'<td style="{c_narrow}">${r["mid_fair_target"]:.2f}</td>'
-                f'<td style="{c_score}"><em>{r["capital_efficiency_score"]:.2f}</em></td>'
-                f'</tr>'
-            )
-        return (
-            f'<div style="border:3px solid #ffc947; border-left:7px solid #ffc947; border-radius:5px; overflow:hidden;">'
-            f'<table style="width:100%; border-collapse:collapse; background:#0d0f14; table-layout:fixed;">'
-            f'<thead><tr>'
-            f'<th style="{hdr_ticker}">Ticker</th>'
-            f'<th style="{hdr_price}">Price</th>'
-            f'<th style="{hdr_upside}">Mid Upside %</th>'
-            f'<th style="{hdr_narrow}">Mid Fair Entry</th>'
-            f'<th style="{hdr_narrow}">Mid Fair Target</th>'
-            f'<th style="{hdr_score}">CE Score</th>'
-            f'</tr></thead>'
-            f'<tbody>{rows}</tbody>'
-            f'</table></div>'
+        hdr  = "background:#2b2200; color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; font-weight:700; text-align:center; padding:0.5rem 0.4rem; border-bottom:2px solid #ffc947;"
+        cell = "color:#e8e4d9; font-family:JetBrains Mono,monospace; font-size:0.82rem; text-align:center; padding:0.6rem 0.4rem; border-bottom:1px solid #2a2000;"
+        rows = "".join(
+            f'<tr><td style="{cell}">{r["ticker"]}</td><td style="{cell}">${r["current_price"]:.2f}</td>'
+            f'<td style="{cell}">{r["mid_upside"]:.1f}%</td><td style="{cell}">${r["mid_fair_entry"]:.2f}</td>'
+            f'<td style="{cell}">${r["mid_fair_target"]:.2f}</td><td style="{cell}"><em>{r["capital_efficiency_score"]:.2f}</em></td></tr>'
+            for _, r in df.iterrows()
         )
+        return (f'<div style="border:3px solid #ffc947; border-left:7px solid #ffc947; border-radius:5px; overflow:hidden;">'
+                f'<table style="width:100%; border-collapse:collapse; background:#0d0f14;">'
+                f'<thead><tr><th style="{hdr}">Ticker</th><th style="{hdr}">Price</th>'
+                f'<th style="{hdr}">Mid Upside %</th><th style="{hdr}">Mid Fair Entry</th>'
+                f'<th style="{hdr}">Mid Fair Target</th><th style="{hdr}">CE Score</th></tr></thead>'
+                f'<tbody>{rows}</tbody></table></div>')
 
+    col_a, col_b = st.columns([4, 5])
     with col_a:
         st.markdown('<h3 style="color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:1.8rem; margin-bottom:0.4rem;">Current — Buy List</h3>', unsafe_allow_html=True)
         buy_df = get_buy_list()
@@ -1194,69 +1220,91 @@ elif page == "Market Data Updates":
         hold_df = get_hold_list()
         if not hold_df.empty:
             st.markdown(hold_html_table(hold_df), unsafe_allow_html=True)
+
     st.markdown("---")
+
     if st.button("RUN MARKET DATA UPDATE", type="primary"):
-        with st.spinner("Fetching live prices from Yahoo Finance..."):
+        with st.spinner("Step 1: Hard Trigger Gate — screening all tickers before any updates..."):
             result, error = run_market_data_update()
+
         if error:
             st.error(f"Error: {error}")
         elif result:
             st.success(f"Market Data Update complete — {result['timestamp']}")
+
+            # ── BLOCKED: Pending Manual Review ────────────────────────────────
+            if result["blocked"]:
+                st.markdown("---")
+                st.markdown(
+                    '<div class="metric-card" style="border:2px solid #ff6b6b; border-left:7px solid #ff6b6b;">'
+                    '<p class="mono" style="color:#ff6b6b; font-weight:700; margin:0;">🚫 HARD TRIGGER GATE — TICKERS HELD PENDING MANUAL REVIEW</p>'
+                    '<p class="mono" style="color:#8899aa; font-size:0.78rem; margin:0.3rem 0;">Frozen in current position. Zero DB writes. Resolve flags before next update.</p>'
+                    '</div>', unsafe_allow_html=True)
+                for ticker, flags in result["blocked"].items():
+                    flag_html = "".join(
+                        f'<p class="trigger-block" style="margin:0.2rem 0 0.2rem 1rem;">{f}</p>'
+                        for f in flags
+                    )
+                    st.markdown(
+                        f'<div class="metric-card" style="border-left:7px solid #ff6b6b; margin-bottom:0.4rem;">'
+                        f'<p class="mono" style="color:#ff6b6b; font-weight:700; margin:0 0 0.4rem 0;">🔒 {ticker} — FROZEN</p>'
+                        f'{flag_html}</div>', unsafe_allow_html=True)
+
+            # ── CLEAR: Price Updates ───────────────────────────────────────────
+            st.markdown("---")
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown("#### Buy List Updates")
-                for item in result["buy"]:
-                    t, old, new, upside, status = item
-                    if new:
-                        delta = new - old
-                        color = "#3ddc84" if delta >= 0 else "#ff6b6b"
-                        delta_str = f"+${delta:.2f}" if delta >= 0 else f"-${abs(delta):.2f}"
-                        st.markdown(f'<p class="mono"><strong>{t}</strong>: ${old:.2f} → <span style="color:{color};">${new:.2f} ({delta_str})</span> &nbsp;|&nbsp; Upside: <span style="color:#3ddc84;">{upside:.1f}%</span></p>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<p class="mono" style="color:#8899aa;"><strong>{t}</strong>: price unavailable</p>', unsafe_allow_html=True)
+                st.markdown("#### ✅ Buy List Updates")
+                if result["buy"]:
+                    for t, old, new, upside, status in result["buy"]:
+                        if new:
+                            delta = new - old
+                            color = "#3ddc84" if delta >= 0 else "#ff6b6b"
+                            ds = f"+${delta:.2f}" if delta >= 0 else f"-${abs(delta):.2f}"
+                            st.markdown(f'<p class="mono"><strong>{t}</strong>: ${old:.2f} → <span style="color:{color};">${new:.2f} ({ds})</span> &nbsp;|&nbsp; Upside: <span style="color:#3ddc84;">{upside:.1f}%</span></p>', unsafe_allow_html=True)
+                        else:
+                            st.markdown(f'<p class="mono" style="color:#8899aa;"><strong>{t}</strong>: price unavailable</p>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<p class="mono" style="color:#8899aa;">No clear Buy tickers this cycle.</p>', unsafe_allow_html=True)
             with col2:
-                st.markdown("#### Hold List Updates")
-                for item in result["hold"]:
-                    t, old, new, upside, status = item
-                    if new:
-                        delta = new - old
-                        color = "#3ddc84" if delta >= 0 else "#ff6b6b"
-                        delta_str = f"+${delta:.2f}" if delta >= 0 else f"-${abs(delta):.2f}"
-                        st.markdown(f'<p class="mono"><strong>{t}</strong>: ${old:.2f} → <span style="color:{color};">${new:.2f} ({delta_str})</span> &nbsp;|&nbsp; Upside: <span style="color:#ffc947;">{upside:.1f}%</span></p>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<p class="mono" style="color:#8899aa;"><strong>{t}</strong>: price unavailable</p>', unsafe_allow_html=True)
+                st.markdown("#### ✅ Hold List Updates")
+                if result["hold"]:
+                    for t, old, new, upside, status in result["hold"]:
+                        if new:
+                            delta = new - old
+                            color = "#3ddc84" if delta >= 0 else "#ff6b6b"
+                            ds = f"+${delta:.2f}" if delta >= 0 else f"-${abs(delta):.2f}"
+                            st.markdown(f'<p class="mono"><strong>{t}</strong>: ${old:.2f} → <span style="color:{color};">${new:.2f} ({ds})</span> &nbsp;|&nbsp; Upside: <span style="color:#ffc947;">{upside:.1f}%</span></p>', unsafe_allow_html=True)
+                        else:
+                            st.markdown(f'<p class="mono" style="color:#8899aa;"><strong>{t}</strong>: price unavailable</p>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<p class="mono" style="color:#8899aa;">No clear Hold tickers this cycle.</p>', unsafe_allow_html=True)
+
+            # ── 3-Tier Auto-Actions (clear tickers only) ──────────────────────
             st.markdown("---")
-            has_tier_events = any([result["auto_upgraded"], result["auto_downgraded"],
-                                   result["auto_retired_buy"], result["auto_retired_hold"]])
-            if has_tier_events:
-                st.markdown("#### 🔀 Universal 3-Tier Defense — Auto-Actions")
+            has_tier = any([result["auto_upgraded"], result["auto_downgraded"],
+                            result["auto_retired_buy"], result["auto_retired_hold"]])
+            if has_tier:
+                st.markdown("#### 🔀 Universal 3-Tier Defense — Auto-Actions (✅ All Clear tickers only)")
                 if result["auto_upgraded"]:
                     st.markdown('<p class="mono" style="color:#3ddc84; font-weight:700;">✅ AUTO-UPGRADED → Buy List</p>', unsafe_allow_html=True)
                     for t, old, new, upside in result["auto_upgraded"]:
-                        st.markdown(f'<p class="mono" style="color:#3ddc84;">▲ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside reached {upside:.1f}% — moved from Hold to Buy List. Institutional field set to Pending.</p>', unsafe_allow_html=True)
+                        st.markdown(f'<p class="mono" style="color:#3ddc84;">▲ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside reached {upside:.1f}% — moved to Buy List. Institutional: Pending.</p>', unsafe_allow_html=True)
                 if result["auto_downgraded"]:
                     st.markdown('<p class="mono" style="color:#ffc947; font-weight:700;">⚠️ AUTO-DOWNGRADED → Hold List</p>', unsafe_allow_html=True)
                     for t, old, new, upside, mid_fe in result["auto_downgraded"]:
-                        st.markdown(f'<p class="mono" style="color:#ffc947;">▼ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside compressed to {upside:.1f}% — moved from Buy to Hold List. Mid Fair Entry recalculated: ${mid_fe:.2f}</p>', unsafe_allow_html=True)
+                        st.markdown(f'<p class="mono" style="color:#ffc947;">▼ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside compressed to {upside:.1f}% — moved to Hold List. Mid Fair Entry: ${mid_fe:.2f}</p>', unsafe_allow_html=True)
                 if result["auto_retired_buy"]:
                     st.markdown('<p class="mono" style="color:#ff6b6b; font-weight:700;">🚫 AUTO-RETIRED from Buy List → Master Log (PASS)</p>', unsafe_allow_html=True)
                     for t, old, new, upside in result["auto_retired_buy"]:
-                        st.markdown(f'<p class="mono" style="color:#ff6b6b;">✗ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside fell to {upside:.1f}% — below 35% threshold. Logged to Master Log as PASS.</p>', unsafe_allow_html=True)
+                        st.markdown(f'<p class="mono" style="color:#ff6b6b;">✗ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside fell to {upside:.1f}% — below 35% threshold.</p>', unsafe_allow_html=True)
                 if result["auto_retired_hold"]:
                     st.markdown('<p class="mono" style="color:#ff6b6b; font-weight:700;">🚫 AUTO-RETIRED from Hold List → Master Log (PASS)</p>', unsafe_allow_html=True)
                     for t, old, new, upside in result["auto_retired_hold"]:
-                        st.markdown(f'<p class="mono" style="color:#ff6b6b;">✗ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside fell to {upside:.1f}% — below 35% threshold. Logged to Master Log as PASS.</p>', unsafe_allow_html=True)
+                        st.markdown(f'<p class="mono" style="color:#ff6b6b;">✗ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside fell to {upside:.1f}% — below 35% threshold.</p>', unsafe_allow_html=True)
             else:
-                st.markdown('<p class="mono" style="color:#3ddc84;">✅ 3-Tier Defense — All Clear — no tier changes this update</p>', unsafe_allow_html=True)
-            st.markdown("---")
-            st.markdown("#### 🚩 Hard Trigger Flags")
-            with st.spinner("Running Hard Trigger checks (yfinance + SEC 8-K)..."):
-                flags = check_hard_triggers(get_buy_list(), get_hold_list())
-            if flags:
-                for f in flags:
-                    st.markdown(f'<p class="trigger-flag">{f}</p>', unsafe_allow_html=True)
-            else:
-                st.markdown(f'<p class="trigger-clear">All Clear — {result["timestamp"]}</p>', unsafe_allow_html=True)
+                st.markdown('<p class="mono" style="color:#3ddc84;">✅ 3-Tier Defense — All Clear — no tier changes this cycle</p>', unsafe_allow_html=True)
+
     st.markdown("---")
     st.markdown("#### Manual Price Override")
     with st.form("manual_price_form"):
@@ -1276,10 +1324,10 @@ elif page == "Market Data Updates":
                     row = c.fetchone()
                     conn.close()
                     if row:
-                        new_mid_upside = round((row[1] - mp_price) / mp_price * 100, 2) if mp_price > 0 and row[1] > 0 else row[0]
-                        new_score = round(new_mid_upside / mp_price, 2)
-                        update_price_in_db("buy_list", mp_ticker, mp_price, new_score, new_mid_upside)
-                        st.success(f"{mp_ticker} updated to ${mp_price:.2f} — Mid Upside: {new_mid_upside:.1f}% — CE Score: {new_score:.2f}")
+                        new_mid_up = round((row[1] - mp_price) / mp_price * 100, 2) if mp_price > 0 and row[1] > 0 else row[0]
+                        new_score  = round(new_mid_up / mp_price, 2)
+                        update_price_in_db("buy_list", mp_ticker, mp_price, new_score, new_mid_up)
+                        st.success(f"{mp_ticker} updated to ${mp_price:.2f} — Mid Upside: {new_mid_up:.1f}% — CE Score: {new_score:.2f}")
                     else:
                         st.error(f"{mp_ticker} not found in Buy List.")
                 else:
@@ -1289,11 +1337,11 @@ elif page == "Market Data Updates":
                     row = c.fetchone()
                     conn.close()
                     if row:
-                        new_mid_upside = round((row[1] - mp_price) / mp_price * 100, 2) if mp_price > 0 and row[1] > 0 else row[0]
-                        new_score = round(new_mid_upside / row[2], 2) if row[2] > 0 else 0
-                        update_price_in_db("hold_list", mp_ticker, mp_price, new_score, new_mid_upside)
-                        st.success(f"{mp_ticker} updated to ${mp_price:.2f} — Mid Upside: {new_mid_upside:.1f}% — CE Score: {new_score:.2f}")
+                        new_mid_up = round((row[1] - mp_price) / mp_price * 100, 2) if mp_price > 0 and row[1] > 0 else row[0]
+                        new_score  = round(new_mid_up / row[2], 2) if row[2] > 0 else 0
+                        update_price_in_db("hold_list", mp_ticker, mp_price, new_score, new_mid_up)
+                        st.success(f"{mp_ticker} updated to ${mp_price:.2f} — Mid Upside: {new_mid_up:.1f}% — CE Score: {new_score:.2f}")
                     else:
                         st.error(f"{mp_ticker} not found in Hold List.")
 
-# Updated: June 02, 2026 — 3:39 PM — Dream Team 💙🦋
+# Updated: June 22, 2026 — 12:15 PM — Dream Team 💙🦋
