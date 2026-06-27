@@ -1,5 +1,6 @@
 import streamlit as st
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import pandas as pd
 from datetime import datetime, date, timedelta
 
@@ -21,8 +22,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-DB_PATH = "investment_tracker.db"
 
 st.markdown("""
 <style>
@@ -98,57 +97,80 @@ def verdict_badge_html(verdict, is_unified):
         style = muted.get(verdict, muted["PASS"])
         return f'<span style="padding:2px 8px; border-radius:3px; font-family:JetBrains Mono,monospace; font-size:0.78rem; font-weight:700; {style}">{label.get(verdict, verdict)}</span>'
 
-# ── DB INIT ───────────────────────────────────────────────────────────────────
+# ── DB CONNECTION (SUPABASE / POSTGRESQL) ─────────────────────────────────────
+# Connection string stored in Streamlit Secrets as:
+#   [supabase]
+#   db_url = "postgresql://postgres:[PASSWORD]@[HOST]:5432/postgres"
 
 def get_conn():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+    db_url = st.secrets["supabase"]["db_url"]
+    conn = psycopg2.connect(db_url)
+    return conn
+
+# ── DB INIT ───────────────────────────────────────────────────────────────────
 
 def init_db():
     conn = get_conn()
     c = conn.cursor()
+
     c.execute("""CREATE TABLE IF NOT EXISTS buy_list (
-        ticker TEXT PRIMARY KEY, current_price REAL, mid_upside REAL,
-        mid_fair_target REAL DEFAULT 0, capital_efficiency_score REAL,
-        institutional_money TEXT DEFAULT 'Pending',
-        date_added TEXT, is_new INTEGER DEFAULT 0, notes TEXT DEFAULT '')""")
-    c.execute("""CREATE TABLE IF NOT EXISTS hold_list (
-        ticker TEXT PRIMARY KEY, current_price REAL, mid_upside REAL,
-        mid_fair_entry REAL, mid_fair_target REAL DEFAULT 0,
+        ticker TEXT PRIMARY KEY,
+        current_price REAL,
+        mid_upside REAL,
+        mid_fair_target REAL DEFAULT 0,
         capital_efficiency_score REAL,
-        date_added TEXT, is_new INTEGER DEFAULT 0, notes TEXT DEFAULT '')""")
+        institutional_money TEXT DEFAULT 'Pending',
+        date_added TEXT,
+        is_new INTEGER DEFAULT 0,
+        notes TEXT DEFAULT ''
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS hold_list (
+        ticker TEXT PRIMARY KEY,
+        current_price REAL,
+        mid_upside REAL,
+        mid_fair_entry REAL,
+        mid_fair_target REAL DEFAULT 0,
+        capital_efficiency_score REAL,
+        date_added TEXT,
+        is_new INTEGER DEFAULT 0,
+        notes TEXT DEFAULT ''
+    )""")
+
     c.execute("""CREATE TABLE IF NOT EXISTS master_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL,
-        date_analyzed TEXT, verdict TEXT, notes TEXT DEFAULT '',
+        id SERIAL PRIMARY KEY,
+        ticker TEXT NOT NULL,
+        date_analyzed TEXT,
+        verdict TEXT,
+        notes TEXT DEFAULT '',
         next_review TEXT DEFAULT 'Trigger-phrase governed',
-        is_unified INTEGER DEFAULT 1)""")
-    # price_history: one row per ticker — baseline anchored to last Unified re-analysis
-    # shares_outstanding added for redesigned Flag #5 (share-count-driven market cap check)
+        is_unified INTEGER DEFAULT 1
+    )""")
+
     c.execute("""CREATE TABLE IF NOT EXISTS price_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         ticker TEXT UNIQUE,
         price REAL,
         market_cap REAL DEFAULT 0,
         shares_outstanding REAL DEFAULT 0,
-        baseline_date TEXT)""")
-    # Safe migrations
-    for ddl in [
-        "ALTER TABLE buy_list ADD COLUMN mid_fair_target REAL DEFAULT 0",
-        "ALTER TABLE hold_list ADD COLUMN mid_fair_target REAL DEFAULT 0",
-        "ALTER TABLE master_log ADD COLUMN is_unified INTEGER DEFAULT 1",
-        "ALTER TABLE price_history ADD COLUMN shares_outstanding REAL DEFAULT 0",
-        "ALTER TABLE price_history ADD COLUMN baseline_date TEXT",
-        "ALTER TABLE price_history ADD COLUMN market_cap REAL DEFAULT 0",
-    ]:
+        baseline_date TEXT
+    )""")
+
+    # Safe migrations — add columns if not already present
+    safe_alters = [
+        "ALTER TABLE buy_list ADD COLUMN IF NOT EXISTS mid_fair_target REAL DEFAULT 0",
+        "ALTER TABLE hold_list ADD COLUMN IF NOT EXISTS mid_fair_target REAL DEFAULT 0",
+        "ALTER TABLE master_log ADD COLUMN IF NOT EXISTS is_unified INTEGER DEFAULT 1",
+        "ALTER TABLE price_history ADD COLUMN IF NOT EXISTS shares_outstanding REAL DEFAULT 0",
+        "ALTER TABLE price_history ADD COLUMN IF NOT EXISTS baseline_date TEXT",
+        "ALTER TABLE price_history ADD COLUMN IF NOT EXISTS market_cap REAL DEFAULT 0",
+    ]
+    for ddl in safe_alters:
         try:
             c.execute(ddl)
         except Exception:
-            pass
-    # Collapse any multi-row price_history to one row per ticker (migration guard)
-    try:
-        c.execute("""DELETE FROM price_history WHERE id NOT IN (
-            SELECT MIN(id) FROM price_history GROUP BY ticker)""")
-    except Exception:
-        pass
+            conn.rollback()
+
     conn.commit()
     conn.close()
 
@@ -166,47 +188,58 @@ def is_seeded():
 def seed_v55():
     conn = get_conn()
     c = conn.cursor()
+
     buy_data = [
         ("GTLB", 25.98, 50.0, 39.0,  "Pending", "May 11, 2026", 0),
         ("NKE",  44.14, 60.0, 70.6,  "Pending", "May 11, 2026", 1),
-        ("CRM",  181.82, 52.5, 277.3,"Pending", "May 11, 2026", 0),
-        ("ADBE", 247.36, 60.0, 395.8,"Pending", "May 11, 2026", 0),
+        ("CRM",  181.82, 52.5, 277.3, "Pending", "May 11, 2026", 0),
+        ("ADBE", 247.36, 60.0, 395.8, "Pending", "May 11, 2026", 0),
     ]
     for ticker, price, mid_up, mid_ft, inst, dt, is_new in buy_data:
         score = round(mid_up / price, 2)
-        c.execute("""INSERT OR IGNORE INTO buy_list
+        c.execute("""INSERT INTO buy_list
             (ticker,current_price,mid_upside,mid_fair_target,capital_efficiency_score,
-             institutional_money,date_added,is_new) VALUES (?,?,?,?,?,?,?,?)""",
+             institutional_money,date_added,is_new)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (ticker) DO NOTHING""",
             (ticker, price, mid_up, mid_ft, score, inst, dt, is_new))
+
     hold_data = [
-        ("GFI",   44.86, 40.0, 30.5, 45.7,   "May 11, 2026", 0),
-        ("HALO",  66.41, 50.0, 55.0, 82.5,   "May 11, 2026", 0),
-        ("TW",   108.81, 50.0, 87.5, 163.2,  "May 11, 2026", 0),
-        ("NOW",   92.50, 42.5, 76.0, 131.8,  "May 11, 2026", 0),
-        ("NEM",  120.67, 52.5, 96.5, 184.0,  "May 11, 2026", 0),
-        ("NDAQ",  88.48, 52.5, 80.5, 135.0,  "May 12, 2026", 0),
-        ("SNOW", 154.06, 37.5, 110.0,211.8,  "May 11, 2026", 0),
-        ("AMZN", 271.82, 32.5, 202.5,360.2,  "May 11, 2026", 0),
-        ("INTU", 397.54, 37.5, 330.0,546.6,  "May 11, 2026", 0),
-        ("EQIX",1073.23, 37.5, 740.0,1475.7, "May 12, 2026", 0),
-        ("AME",  231.61, 42.5, 165.0,330.0,  "May 12, 2026", 0),
-        ("CRWD", 548.02, 42.5, 335.0,781.4,  "May 12, 2026", 1),
+        ("GFI",   44.86,   40.0, 30.5,  45.7,   "May 11, 2026", 0),
+        ("HALO",  66.41,   50.0, 55.0,  82.5,   "May 11, 2026", 0),
+        ("TW",   108.81,   50.0, 87.5,  163.2,  "May 11, 2026", 0),
+        ("NOW",   92.50,   42.5, 76.0,  131.8,  "May 11, 2026", 0),
+        ("NEM",  120.67,   52.5, 96.5,  184.0,  "May 11, 2026", 0),
+        ("NDAQ",  88.48,   52.5, 80.5,  135.0,  "May 12, 2026", 0),
+        ("SNOW", 154.06,   37.5, 110.0, 211.8,  "May 11, 2026", 0),
+        ("AMZN", 271.82,   32.5, 202.5, 360.2,  "May 11, 2026", 0),
+        ("INTU", 397.54,   37.5, 330.0, 546.6,  "May 11, 2026", 0),
+        ("EQIX", 1073.23,  37.5, 740.0, 1475.7, "May 12, 2026", 0),
+        ("AME",  231.61,   42.5, 165.0, 330.0,  "May 12, 2026", 0),
+        ("CRWD", 548.02,   42.5, 335.0, 781.4,  "May 12, 2026", 1),
     ]
     for ticker, price, mid_up, mid_fe, mid_ft, dt, is_new in hold_data:
         score = round(mid_up / mid_fe, 2)
-        c.execute("""INSERT OR IGNORE INTO hold_list
+        c.execute("""INSERT INTO hold_list
             (ticker,current_price,mid_upside,mid_fair_entry,mid_fair_target,
-             capital_efficiency_score,date_added,is_new) VALUES (?,?,?,?,?,?,?,?)""",
+             capital_efficiency_score,date_added,is_new)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (ticker) DO NOTHING""",
             (ticker, price, mid_up, mid_fe, mid_ft, score, dt, is_new))
+
     for ticker, dt in [("GTLB","May 4, 2026"),("ADBE","May 4, 2026"),("NKE","May 4, 2026"),("CRM","May 4, 2026")]:
-        c.execute("INSERT OR IGNORE INTO master_log (ticker,date_analyzed,verdict,is_unified) VALUES (?,?,'BUY',1)", (ticker, dt))
+        c.execute("""INSERT INTO master_log (ticker,date_analyzed,verdict,is_unified)
+            VALUES (%s,%s,'BUY',1) ON CONFLICT DO NOTHING""", (ticker, dt))
+
     hold_log = [
         ("AMZN","May 4, 2026",0),("INTU","May 4, 2026",0),("NOW","May 4, 2026",0),("SNOW","May 4, 2026",0),
         ("HALO","May 5, 2026",1),("GFI","May 5, 2026",1),("TW","May 5, 2026",1),("NEM","May 11, 2026",1),
         ("NDAQ","May 12, 2026",1),("EQIX","May 12, 2026",1),("AME","May 12, 2026",1),("CRWD","May 12, 2026",1),
     ]
     for ticker, dt, iu in hold_log:
-        c.execute("INSERT OR IGNORE INTO master_log (ticker,date_analyzed,verdict,is_unified) VALUES (?,?,'HOLD',?)", (ticker, dt, iu))
+        c.execute("""INSERT INTO master_log (ticker,date_analyzed,verdict,is_unified)
+            VALUES (%s,%s,'HOLD',%s) ON CONFLICT DO NOTHING""", (ticker, dt, iu))
+
     hard_pass_log = [
         ("CNXC","May 4, 2026",0),("G","May 4, 2026",0),("EPAM","May 4, 2026",0),("SAIC","May 4, 2026",0),
         ("CTSH","May 4, 2026",0),("GIB","May 4, 2026",0),("DOX","May 4, 2026",0),("XOM","May 12, 2026",1),
@@ -219,7 +252,9 @@ def seed_v55():
         ("NVR","May 12, 2026",1),("EXPD","May 12, 2026",1),
     ]
     for ticker, dt, iu in hard_pass_log:
-        c.execute("INSERT OR IGNORE INTO master_log (ticker,date_analyzed,verdict,is_unified) VALUES (?,?,'HARD_PASS',?)", (ticker, dt, iu))
+        c.execute("""INSERT INTO master_log (ticker,date_analyzed,verdict,is_unified)
+            VALUES (%s,%s,'HARD_PASS',%s) ON CONFLICT DO NOTHING""", (ticker, dt, iu))
+
     pass_log = [
         ("CSWI","May 4, 2026",0),("TRU","May 4, 2026",0),("FIS","May 4, 2026",0),("MSFT","May 4, 2026",0),
         ("CRWV","May 4, 2026",0),("PANW","May 18, 2026",1),("SOFI","May 4, 2026",0),("PLTR","May 4, 2026",0),
@@ -252,10 +287,14 @@ def seed_v55():
         ("CART","May 12, 2026",1),("ALVO","May 12, 2026",1),("TTWO","May 12, 2026",1),("MSI","May 12, 2026",1),
         ("ZBRA","May 12, 2026",1),("AJG","May 12, 2026",1),("HEI","May 12, 2026",1),("IDXX","May 12, 2026",1),
         ("WCN","May 12, 2026",1),("BFAM","May 12, 2026",1),("CLH","May 12, 2026",1),("WSO","May 12, 2026",1),
-        ("LII","May 12, 2026",1),("CSL","May 12, 2026",1),
+        ("LII","May 12, 2026",1),("CSL","May 12, 2026",1),("VRSK","May 4, 2026",0),
+        ("ACGL","May 4, 2026",0),("V","May 4, 2026",0),("ACN","May 4, 2026",0),
+        ("ADP","May 4, 2026",0),("ORLY","May 4, 2026",0),
     ]
     for ticker, dt, iu in pass_log:
-        c.execute("INSERT OR IGNORE INTO master_log (ticker,date_analyzed,verdict,is_unified) VALUES (?,?,'PASS',?)", (ticker, dt, iu))
+        c.execute("""INSERT INTO master_log (ticker,date_analyzed,verdict,is_unified)
+            VALUES (%s,%s,'PASS',%s) ON CONFLICT DO NOTHING""", (ticker, dt, iu))
+
     conn.commit()
     conn.close()
 
@@ -277,7 +316,7 @@ def get_master_log(verdict_filter=None):
     conn = get_conn()
     if verdict_filter and verdict_filter != "ALL":
         df = pd.read_sql(
-            "SELECT * FROM master_log WHERE verdict=? ORDER BY date_analyzed DESC, id DESC",
+            "SELECT * FROM master_log WHERE verdict=%s ORDER BY date_analyzed DESC, id DESC",
             conn, params=(verdict_filter,))
     else:
         df = pd.read_sql("SELECT * FROM master_log ORDER BY date_analyzed DESC, id DESC", conn)
@@ -288,7 +327,7 @@ def lookup_ticker(ticker):
     ticker = ticker.upper().strip()
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT verdict,date_analyzed,notes,is_unified,id FROM master_log WHERE ticker=? ORDER BY id DESC LIMIT 1", (ticker,))
+    c.execute("SELECT verdict,date_analyzed,notes,is_unified,id FROM master_log WHERE ticker=%s ORDER BY id DESC LIMIT 1", (ticker,))
     row = c.fetchone()
     conn.close()
     return row
@@ -297,22 +336,20 @@ def add_master_log(ticker, date_str, verdict, notes="", is_unified=1):
     ticker = ticker.upper().strip()
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT id FROM master_log WHERE ticker=?", (ticker,))
+    c.execute("SELECT id FROM master_log WHERE ticker=%s ORDER BY id DESC LIMIT 1", (ticker,))
     existing = c.fetchone()
     if existing:
-        c.execute("UPDATE master_log SET date_analyzed=?,verdict=?,notes=?,is_unified=? WHERE ticker=?",
-                  (date_str, verdict, notes, is_unified, ticker))
+        c.execute("""UPDATE master_log SET date_analyzed=%s, verdict=%s, notes=%s, is_unified=%s
+                     WHERE id=%s""",
+                  (date_str, verdict, notes, is_unified, existing[0]))
     else:
-        c.execute("INSERT INTO master_log (ticker,date_analyzed,verdict,notes,is_unified) VALUES (?,?,?,?,?)",
+        c.execute("""INSERT INTO master_log (ticker,date_analyzed,verdict,notes,is_unified)
+                     VALUES (%s,%s,%s,%s,%s)""",
                   (ticker, date_str, verdict, notes, is_unified))
     conn.commit()
     conn.close()
 
 # ── BASELINE SNAPSHOT ─────────────────────────────────────────────────────────
-# Resets ONLY on genuine Unified 7 Points re-analysis (add_or_update_buy /
-# add_or_update_hold). Auto-routing tier changes do NOT call this function.
-# One row per ticker (UNIQUE constraint). Stores price, market_cap,
-# shares_outstanding, and baseline_date for Flag #1 and redesigned Flag #5.
 
 def reset_baseline_snapshot(ticker, price, market_cap, shares_outstanding):
     baseline_date = date.today().strftime("%Y-%m-%d")
@@ -320,12 +357,12 @@ def reset_baseline_snapshot(ticker, price, market_cap, shares_outstanding):
     c = conn.cursor()
     c.execute("""
         INSERT INTO price_history (ticker, price, market_cap, shares_outstanding, baseline_date)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(ticker) DO UPDATE SET
-            price=excluded.price,
-            market_cap=excluded.market_cap,
-            shares_outstanding=excluded.shares_outstanding,
-            baseline_date=excluded.baseline_date
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (ticker) DO UPDATE SET
+            price=EXCLUDED.price,
+            market_cap=EXCLUDED.market_cap,
+            shares_outstanding=EXCLUDED.shares_outstanding,
+            baseline_date=EXCLUDED.baseline_date
     """, (ticker, price, market_cap or 0, shares_outstanding or 0, baseline_date))
     conn.commit()
     conn.close()
@@ -411,7 +448,6 @@ def fetch_current_fundamentals(ticker):
 # ── WRITE HELPERS ─────────────────────────────────────────────────────────────
 
 def add_or_update_buy(ticker, price, mid_up, mid_ft, inst, date_str, notes):
-    """Genuine re-analysis add/update — resets baseline snapshot."""
     ticker = ticker.upper().strip()
     score = round(mid_up / price, 2) if price > 0 else 0
     conn = get_conn()
@@ -420,13 +456,16 @@ def add_or_update_buy(ticker, price, mid_up, mid_ft, inst, date_str, notes):
     c.execute("""INSERT INTO buy_list
         (ticker,current_price,mid_upside,mid_fair_target,capital_efficiency_score,
          institutional_money,date_added,is_new,notes)
-        VALUES (?,?,?,?,?,?,?,1,?)
-        ON CONFLICT(ticker) DO UPDATE SET
-            current_price=excluded.current_price, mid_upside=excluded.mid_upside,
-            mid_fair_target=excluded.mid_fair_target,
-            capital_efficiency_score=excluded.capital_efficiency_score,
-            institutional_money=excluded.institutional_money,
-            date_added=excluded.date_added, is_new=1, notes=excluded.notes""",
+        VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s)
+        ON CONFLICT (ticker) DO UPDATE SET
+            current_price=EXCLUDED.current_price,
+            mid_upside=EXCLUDED.mid_upside,
+            mid_fair_target=EXCLUDED.mid_fair_target,
+            capital_efficiency_score=EXCLUDED.capital_efficiency_score,
+            institutional_money=EXCLUDED.institutional_money,
+            date_added=EXCLUDED.date_added,
+            is_new=1,
+            notes=EXCLUDED.notes""",
         (ticker, price, mid_up, mid_ft, score, inst, date_str, notes))
     conn.commit()
     conn.close()
@@ -435,13 +474,11 @@ def add_or_update_buy(ticker, price, mid_up, mid_ft, inst, date_str, notes):
         try:
             f = fetch_current_fundamentals(ticker)
             if f:
-                reset_baseline_snapshot(ticker, price,
-                                        f.get("market_cap"), f.get("shares_outstanding"))
+                reset_baseline_snapshot(ticker, price, f.get("market_cap"), f.get("shares_outstanding"))
         except Exception:
             pass
 
 def add_or_update_hold(ticker, price, mid_up, mid_fe, mid_ft, date_str, notes):
-    """Genuine re-analysis add/update — resets baseline snapshot."""
     ticker = ticker.upper().strip()
     score = round(mid_up / mid_fe, 2) if mid_fe > 0 else 0
     conn = get_conn()
@@ -450,13 +487,16 @@ def add_or_update_hold(ticker, price, mid_up, mid_fe, mid_ft, date_str, notes):
     c.execute("""INSERT INTO hold_list
         (ticker,current_price,mid_upside,mid_fair_entry,mid_fair_target,
          capital_efficiency_score,date_added,is_new,notes)
-        VALUES (?,?,?,?,?,?,?,1,?)
-        ON CONFLICT(ticker) DO UPDATE SET
-            current_price=excluded.current_price, mid_upside=excluded.mid_upside,
-            mid_fair_entry=excluded.mid_fair_entry,
-            mid_fair_target=excluded.mid_fair_target,
-            capital_efficiency_score=excluded.capital_efficiency_score,
-            date_added=excluded.date_added, is_new=1, notes=excluded.notes""",
+        VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s)
+        ON CONFLICT (ticker) DO UPDATE SET
+            current_price=EXCLUDED.current_price,
+            mid_upside=EXCLUDED.mid_upside,
+            mid_fair_entry=EXCLUDED.mid_fair_entry,
+            mid_fair_target=EXCLUDED.mid_fair_target,
+            capital_efficiency_score=EXCLUDED.capital_efficiency_score,
+            date_added=EXCLUDED.date_added,
+            is_new=1,
+            notes=EXCLUDED.notes""",
         (ticker, price, mid_up, mid_fe, mid_ft, score, date_str, notes))
     conn.commit()
     conn.close()
@@ -465,35 +505,33 @@ def add_or_update_hold(ticker, price, mid_up, mid_fe, mid_ft, date_str, notes):
         try:
             f = fetch_current_fundamentals(ticker)
             if f:
-                reset_baseline_snapshot(ticker, price,
-                                        f.get("market_cap"), f.get("shares_outstanding"))
+                reset_baseline_snapshot(ticker, price, f.get("market_cap"), f.get("shares_outstanding"))
         except Exception:
             pass
 
 def remove_from_buy(ticker):
     conn = get_conn()
     c = conn.cursor()
-    c.execute("DELETE FROM buy_list WHERE ticker=?", (ticker.upper(),))
+    c.execute("DELETE FROM buy_list WHERE ticker=%s", (ticker.upper(),))
     conn.commit()
     conn.close()
 
 def remove_from_hold(ticker):
     conn = get_conn()
     c = conn.cursor()
-    c.execute("DELETE FROM hold_list WHERE ticker=?", (ticker.upper(),))
+    c.execute("DELETE FROM hold_list WHERE ticker=%s", (ticker.upper(),))
     conn.commit()
     conn.close()
 
 def update_price_in_db(table, ticker, new_price, new_score, new_mid_upside=None):
-    """Auto-routing price update only. Does NOT reset baseline snapshot."""
     conn = get_conn()
     c = conn.cursor()
     today = date.today().strftime("%b %d, %Y")
     if new_mid_upside is not None:
-        c.execute(f"UPDATE {table} SET current_price=?,capital_efficiency_score=?,mid_upside=?,date_added=? WHERE ticker=?",
+        c.execute(f"UPDATE {table} SET current_price=%s, capital_efficiency_score=%s, mid_upside=%s, date_added=%s WHERE ticker=%s",
                   (new_price, new_score, new_mid_upside, today, ticker))
     else:
-        c.execute(f"UPDATE {table} SET current_price=?,capital_efficiency_score=?,date_added=? WHERE ticker=?",
+        c.execute(f"UPDATE {table} SET current_price=%s, capital_efficiency_score=%s, date_added=%s WHERE ticker=%s",
                   (new_price, new_score, today, ticker))
     conn.commit()
     conn.close()
@@ -537,34 +575,13 @@ def check_8k_triggers(ticker):
             except Exception:
                 continue
     except Exception:
-        # Failed lookup = ⚠️ blocked — requires manual SEC EDGAR check
         flags.append(
             f"⚠️ {ticker} — 8-K lookup failed — manual SEC EDGAR check required "
             f"— ticker held pending review"
         )
     return flags
 
-# ── HARD TRIGGER GATE — STEP 1 (BLOCKING GATE BEFORE ANY DB WRITES) ──────────
-#
-# Flags implemented:
-#  1.  Price movement ±20% from baseline (anchored to last Unified re-analysis)
-#  2.  Revenue deceleration — graduated ladder
-#  3.  FCF turned negative — graduated
-#  4.  Major leadership change              (8-K Item 5.02)
-#  5.  Share-count-driven market cap ±5%   (REDESIGNED — decoupled from Flag #1)
-#        Expected mktcap = current_price × baseline_shares
-#        Actual mktcap   = current_price × current_shares
-#        Flags when share count change alone causes ≥5% market cap shift
-#  6.  Debt/credit structure change         (8-K Item 2.03)
-#  7.  Acquisition/merger                   (8-K Item 1.01 / 2.01)
-#  8.  Regulatory/legal action              (8-K Item 8.01)
-#  9.  Guidance cut/withdrawal              (8-K Item 2.02 / 7.01)
-# 10.  Share dilution event                 (8-K Item 3.02)
-# 11.  Significant business structure change (surfaced via 8-K review)
-#
-# ⚠️ Failed 8-K lookup = blocked pending manual SEC EDGAR review.
-# Returns: blocked dict { ticker: [flags] }, clear list [ ticker, ... ]
-# ─────────────────────────────────────────────────────────────────────────────
+# ── HARD TRIGGER GATE ─────────────────────────────────────────────────────────
 
 def run_hard_trigger_gate(all_tickers_df):
     blocked = {}
@@ -577,15 +594,13 @@ def run_hard_trigger_gate(all_tickers_df):
         current_price = row["current_price"]
         ticker_flags = []
 
-        # Pull baseline
         c.execute("""SELECT price, market_cap, shares_outstanding, baseline_date
-                     FROM price_history WHERE ticker=?""", (t,))
+                     FROM price_history WHERE ticker=%s""", (t,))
         bl = c.fetchone()
         baseline_price  = bl[0] if bl else None
         baseline_shares = bl[2] if bl else None
         baseline_date_str = bl[3] if bl else "unknown"
 
-        # ── Flag #1: Price ±20% from baseline ────────────────────────────────
         if baseline_price and baseline_price > 0:
             pct_move = abs(current_price - baseline_price) / baseline_price * 100
             if pct_move >= 20:
@@ -595,7 +610,6 @@ def run_hard_trigger_gate(all_tickers_df):
                     f"(${baseline_price:.2f} on {baseline_date_str} → ${current_price:.2f}) — review required"
                 )
 
-        # Fetch fundamentals for flags 2, 3, 5
         fundamentals = None
         if YFINANCE_AVAILABLE:
             fundamentals = fetch_current_fundamentals(t)
@@ -609,7 +623,6 @@ def run_hard_trigger_gate(all_tickers_df):
             fcf_values     = fundamentals.get("fcf_values", [])
             rev_growth     = fundamentals.get("revenue_growth_rates", [])
 
-            # ── Flag #2: Revenue deceleration ladder ──────────────────────────
             if len(rev_growth) >= 2:
                 latest   = rev_growth[-1]
                 previous = rev_growth[-2]
@@ -642,7 +655,6 @@ def run_hard_trigger_gate(all_tickers_df):
                         f"— Critical note: low growth tier (below 8% threshold)"
                     )
 
-            # ── Flag #3: FCF negative — graduated ────────────────────────────
             if fcf_values:
                 mrq = fcf_values[0]
                 if mrq < 0:
@@ -658,9 +670,6 @@ def run_hard_trigger_gate(all_tickers_df):
                             f"(most recent quarter: ${mrq/1e6:.1f}M) — immediate review required"
                         )
 
-            # ── Flag #5 (REDESIGNED): Share-count-driven market cap ±5% ──────
-            # Holds price constant — isolates dilution / buyback events only.
-            # Fully decoupled from Flag #1 (price movement).
             if baseline_shares and baseline_shares > 0 and current_shares and current_shares > 0:
                 expected_mktcap = current_price * baseline_shares
                 actual_mktcap   = current_price * current_shares
@@ -679,10 +688,8 @@ def run_hard_trigger_gate(all_tickers_df):
                             f"— significant buyback — noted"
                         )
 
-        # ── Flags 4, 6–11: SEC 8-K (90-day lookback) ─────────────────────────
         ticker_flags.extend(check_8k_triggers(t))
 
-        # ── Gate decision ─────────────────────────────────────────────────────
         if ticker_flags:
             blocked[t] = ticker_flags
         else:
@@ -692,16 +699,6 @@ def run_hard_trigger_gate(all_tickers_df):
     return blocked, clear
 
 # ── MAIN MARKET DATA UPDATE ───────────────────────────────────────────────────
-#
-# NEW EXECUTION ORDER:
-#  Step 1 — Hard Trigger Gate (ALL tickers) — no DB writes yet
-#  Step 2 — Fetch prices (✅ All Clear tickers only)
-#  Steps 3-6 — Mid Upside recalc → 3-tier routing → CE Score → DB writes
-#              (✅ All Clear tickers only)
-#
-# Blocked tickers: frozen in current position, zero DB writes, surfaced in UI.
-# Auto-routing tier changes do NOT reset baseline snapshot.
-# ─────────────────────────────────────────────────────────────────────────────
 
 def run_market_data_update():
     buy_df  = get_buy_list()
@@ -712,10 +709,8 @@ def run_market_data_update():
     today  = date.today().strftime("%b %d, %Y")
     all_df = pd.concat([buy_df, hold_df], ignore_index=True)
 
-    # Step 1 — Hard Trigger Gate
     blocked, clear_tickers = run_hard_trigger_gate(all_df)
 
-    # Step 2 — Fetch prices for clear tickers only
     prices = {}
     for t in clear_tickers:
         try:
@@ -723,7 +718,6 @@ def run_market_data_update():
         except Exception:
             prices[t] = None
 
-    # Steps 3-6 — Routing + writes for clear tickers only
     updated_buy = []
     updated_hold = []
     auto_downgraded = []
@@ -755,12 +749,12 @@ def run_market_data_update():
             cc.execute("""INSERT INTO hold_list
                 (ticker,current_price,mid_upside,mid_fair_entry,mid_fair_target,
                  capital_efficiency_score,date_added,is_new,notes)
-                VALUES (?,?,?,?,?,?,?,1,?)
-                ON CONFLICT(ticker) DO UPDATE SET
-                    current_price=excluded.current_price,mid_upside=excluded.mid_upside,
-                    mid_fair_entry=excluded.mid_fair_entry,mid_fair_target=excluded.mid_fair_target,
-                    capital_efficiency_score=excluded.capital_efficiency_score,
-                    date_added=excluded.date_added,is_new=1,notes=excluded.notes""",
+                VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s)
+                ON CONFLICT (ticker) DO UPDATE SET
+                    current_price=EXCLUDED.current_price,mid_upside=EXCLUDED.mid_upside,
+                    mid_fair_entry=EXCLUDED.mid_fair_entry,mid_fair_target=EXCLUDED.mid_fair_target,
+                    capital_efficiency_score=EXCLUDED.capital_efficiency_score,
+                    date_added=EXCLUDED.date_added,is_new=1,notes=EXCLUDED.notes""",
                 (t.upper(), new_price, new_mid_up, mid_fe_new, mid_ft, score, today,
                  f"Auto-downgraded from Buy List — Mid Upside compressed to {new_mid_up:.1f}% — {today}"))
             conn.commit()
@@ -794,13 +788,13 @@ def run_market_data_update():
             cc.execute("""INSERT INTO buy_list
                 (ticker,current_price,mid_upside,mid_fair_target,capital_efficiency_score,
                  institutional_money,date_added,is_new,notes)
-                VALUES (?,?,?,?,?,?,?,1,?)
-                ON CONFLICT(ticker) DO UPDATE SET
-                    current_price=excluded.current_price,mid_upside=excluded.mid_upside,
-                    mid_fair_target=excluded.mid_fair_target,
-                    capital_efficiency_score=excluded.capital_efficiency_score,
-                    institutional_money=excluded.institutional_money,
-                    date_added=excluded.date_added,is_new=1,notes=excluded.notes""",
+                VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s)
+                ON CONFLICT (ticker) DO UPDATE SET
+                    current_price=EXCLUDED.current_price,mid_upside=EXCLUDED.mid_upside,
+                    mid_fair_target=EXCLUDED.mid_fair_target,
+                    capital_efficiency_score=EXCLUDED.capital_efficiency_score,
+                    institutional_money=EXCLUDED.institutional_money,
+                    date_added=EXCLUDED.date_added,is_new=1,notes=EXCLUDED.notes""",
                 (t.upper(), new_price, new_mid_up, mid_ft, score, "Pending", today,
                  f"Auto-upgraded from Hold List — Mid Upside reached {new_mid_up:.1f}% — {today}"))
             conn.commit()
@@ -814,7 +808,7 @@ def run_market_data_update():
             update_price_in_db("hold_list", t, new_price, new_score, new_mid_up)
             conn = get_conn()
             cc = conn.cursor()
-            cc.execute("UPDATE hold_list SET mid_fair_entry=? WHERE ticker=?", (mid_fe_new, t))
+            cc.execute("UPDATE hold_list SET mid_fair_entry=%s WHERE ticker=%s", (mid_fe_new, t))
             conn.commit()
             conn.close()
             updated_hold.append((t, row["current_price"], new_price, new_mid_up, "active"))
@@ -882,7 +876,7 @@ if page == "Dashboard":
                 f'<div class="metric-card" style="border-left:7px solid #3ddc84; padding:0.7rem 1rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
                 f'&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
-                f'{"&nbsp;<span style=\'color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.68rem; font-style:italic;\'>← NEW</span>" if row["is_new"] else ""}'
+                ("&nbsp;<span style='color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.68rem; font-style:italic;'>← NEW</span>" if row["is_new"] else "") +
                 f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.72rem;">'
                 f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#3ddc84;">{row["mid_upside"]:.1f}%</span>'
                 f'&nbsp;&nbsp;&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#3ddc84;">${row["mid_fair_target"]:.2f}</span>'
@@ -892,11 +886,12 @@ if page == "Dashboard":
         st.markdown("#### :orange[Hold List — Ranked by Efficiency]")
         hold_df = get_hold_list()
         for _, row in hold_df.iterrows():
+            new_badge_h = "&nbsp;<span style='color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.68rem; font-style:italic;'>← NEW</span>" if row["is_new"] else ""
             st.markdown(
                 f'<div class="metric-card" style="border-left:7px solid #ffc947; padding:0.7rem 1rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
                 f'&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
-                f'{"&nbsp;<span style=\'color:#ffc947; font-family:JetBrains Mono,monospace; font-size:0.68rem; font-style:italic;\'>← NEW</span>" if row["is_new"] else ""}'
+                f'{new_badge_h}'
                 f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.72rem;">'
                 f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#ffc947;">{row["mid_upside"]:.1f}%</span>'
                 f'&nbsp;&nbsp;&nbsp;<span style="color:#e8e4d9;">Entry: </span><span style="color:#ffc947;">${row["mid_fair_entry"]:.2f}</span>'
@@ -1147,10 +1142,10 @@ elif page == "Add / Update":
             if d_id and d_confirm:
                 conn = get_conn()
                 c = conn.cursor()
-                c.execute("SELECT ticker,verdict,date_analyzed FROM master_log WHERE id=?", (int(d_id),))
+                c.execute("SELECT ticker,verdict,date_analyzed FROM master_log WHERE id=%s", (int(d_id),))
                 row = c.fetchone()
                 if row and row[0] == d_confirm:
-                    c.execute("DELETE FROM master_log WHERE id=?", (int(d_id),))
+                    c.execute("DELETE FROM master_log WHERE id=%s", (int(d_id),))
                     conn.commit()
                     st.success(f"Deleted: ID {int(d_id)} — {row[0]} | {row[1]} | {row[2]}")
                 elif row and row[0] != d_confirm:
@@ -1232,7 +1227,6 @@ elif page == "Market Data Updates":
         elif result:
             st.success(f"Market Data Update complete — {result['timestamp']}")
 
-            # ── BLOCKED: Pending Manual Review ────────────────────────────────
             if result["blocked"]:
                 st.markdown("---")
                 st.markdown(
@@ -1250,7 +1244,6 @@ elif page == "Market Data Updates":
                         f'<p class="mono" style="color:#ff6b6b; font-weight:700; margin:0 0 0.4rem 0;">🔒 {ticker} — FROZEN</p>'
                         f'{flag_html}</div>', unsafe_allow_html=True)
 
-            # ── CLEAR: Price Updates ───────────────────────────────────────────
             st.markdown("---")
             col1, col2 = st.columns(2)
             with col1:
@@ -1280,7 +1273,6 @@ elif page == "Market Data Updates":
                 else:
                     st.markdown('<p class="mono" style="color:#8899aa;">No clear Hold tickers this cycle.</p>', unsafe_allow_html=True)
 
-            # ── 3-Tier Auto-Actions (clear tickers only) ──────────────────────
             st.markdown("---")
             has_tier = any([result["auto_upgraded"], result["auto_downgraded"],
                             result["auto_retired_buy"], result["auto_retired_hold"]])
@@ -1320,7 +1312,7 @@ elif page == "Market Data Updates":
                 if mp_list == "Buy List":
                     conn = get_conn()
                     c = conn.cursor()
-                    c.execute("SELECT mid_upside, mid_fair_target FROM buy_list WHERE ticker=?", (mp_ticker,))
+                    c.execute("SELECT mid_upside, mid_fair_target FROM buy_list WHERE ticker=%s", (mp_ticker,))
                     row = c.fetchone()
                     conn.close()
                     if row:
@@ -1333,7 +1325,7 @@ elif page == "Market Data Updates":
                 else:
                     conn = get_conn()
                     c = conn.cursor()
-                    c.execute("SELECT mid_upside, mid_fair_target, mid_fair_entry FROM hold_list WHERE ticker=?", (mp_ticker,))
+                    c.execute("SELECT mid_upside, mid_fair_target, mid_fair_entry FROM hold_list WHERE ticker=%s", (mp_ticker,))
                     row = c.fetchone()
                     conn.close()
                     if row:
@@ -1344,4 +1336,4 @@ elif page == "Market Data Updates":
                     else:
                         st.error(f"{mp_ticker} not found in Hold List.")
 
-# Updated: June 22, 2026 — 12:15 PM — Dream Team 💙🦋
+# Updated: June 24, 2026 — Dream Team 💙🦋
