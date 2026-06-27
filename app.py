@@ -300,18 +300,21 @@ def seed_v55():
 
 # ── DB HELPERS ────────────────────────────────────────────────────────────────
 
+@st.cache_data(ttl=300)
 def get_buy_list():
     conn = get_conn()
     df = pd.read_sql("SELECT * FROM buy_list ORDER BY capital_efficiency_score DESC", conn)
     conn.close()
     return df
 
+@st.cache_data(ttl=300)
 def get_hold_list():
     conn = get_conn()
     df = pd.read_sql("SELECT * FROM hold_list ORDER BY capital_efficiency_score DESC", conn)
     conn.close()
     return df
 
+@st.cache_data(ttl=300)
 def get_master_log(verdict_filter=None):
     conn = get_conn()
     if verdict_filter and verdict_filter != "ALL":
@@ -323,6 +326,7 @@ def get_master_log(verdict_filter=None):
     conn.close()
     return df
 
+@st.cache_data(ttl=300)
 def lookup_ticker(ticker):
     ticker = ticker.upper().strip()
     conn = get_conn()
@@ -348,6 +352,7 @@ def add_master_log(ticker, date_str, verdict, notes="", is_unified=1):
                   (ticker, date_str, verdict, notes, is_unified))
     conn.commit()
     conn.close()
+    st.cache_data.clear()
 
 # ── BASELINE SNAPSHOT ─────────────────────────────────────────────────────────
 
@@ -477,6 +482,7 @@ def add_or_update_buy(ticker, price, mid_up, mid_ft, inst, date_str, notes):
                 reset_baseline_snapshot(ticker, price, f.get("market_cap"), f.get("shares_outstanding"))
         except Exception:
             pass
+    st.cache_data.clear()
 
 def add_or_update_hold(ticker, price, mid_up, mid_fe, mid_ft, date_str, notes):
     ticker = ticker.upper().strip()
@@ -508,6 +514,7 @@ def add_or_update_hold(ticker, price, mid_up, mid_fe, mid_ft, date_str, notes):
                 reset_baseline_snapshot(ticker, price, f.get("market_cap"), f.get("shares_outstanding"))
         except Exception:
             pass
+    st.cache_data.clear()
 
 def remove_from_buy(ticker):
     conn = get_conn()
@@ -515,6 +522,7 @@ def remove_from_buy(ticker):
     c.execute("DELETE FROM buy_list WHERE ticker=%s", (ticker.upper(),))
     conn.commit()
     conn.close()
+    st.cache_data.clear()
 
 def remove_from_hold(ticker):
     conn = get_conn()
@@ -522,6 +530,7 @@ def remove_from_hold(ticker):
     c.execute("DELETE FROM hold_list WHERE ticker=%s", (ticker.upper(),))
     conn.commit()
     conn.close()
+    st.cache_data.clear()
 
 def update_price_in_db(table, ticker, new_price, new_score, new_mid_upside=None):
     conn = get_conn()
@@ -535,6 +544,7 @@ def update_price_in_db(table, ticker, new_price, new_score, new_mid_upside=None)
                   (new_price, new_score, today, ticker))
     conn.commit()
     conn.close()
+    st.cache_data.clear()
 
 # ── 8-K TRIGGER ITEMS ────────────────────────────────────────────────────────
 
@@ -1337,4 +1347,4 @@ elif page == "Market Data Updates":
                     else:
                         st.error(f"{mp_ticker} not found in Hold List.")
 
-# Updated: June 27, 2026 — 11:45 AM — Dream Team 💙🦋
+# Updated: June 27, 2026 — 5:00 PM — Dream Team 💙🦋
