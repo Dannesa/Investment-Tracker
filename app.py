@@ -101,10 +101,23 @@ def verdict_badge_html(verdict, is_unified):
 # Connection string stored in Streamlit Secrets as:
 #   [supabase]
 #   db_url = "postgresql://postgres:[PASSWORD]@[HOST]:5432/postgres"
+#
+# Uses st.cache_resource to maintain a single persistent connection per session.
+# ping() validates the connection is alive before returning it; reconnects if stale.
+
+@st.cache_resource
+def _get_persistent_conn():
+    db_url = st.secrets["supabase"]["db_url"]
+    return psycopg2.connect(db_url)
 
 def get_conn():
-    db_url = st.secrets["supabase"]["db_url"]
-    conn = psycopg2.connect(db_url)
+    conn = _get_persistent_conn()
+    try:
+        conn.cursor().execute("SELECT 1")
+    except Exception:
+        conn = psycopg2.connect(st.secrets["supabase"]["db_url"])
+        # Update the cached resource
+        _get_persistent_conn.clear()
     return conn
 
 # ── DB INIT ───────────────────────────────────────────────────────────────────
@@ -1347,4 +1360,4 @@ elif page == "Market Data Updates":
                     else:
                         st.error(f"{mp_ticker} not found in Hold List.")
 
-# Updated: June 27, 2026 — 5:15 PM — Dream Team 💙🦋
+# Updated: June 27, 2026 — 5:30 PM — Dream Team 💙🦋
