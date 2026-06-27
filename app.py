@@ -872,11 +872,12 @@ if page == "Dashboard":
         st.markdown("#### :green[Buy List — Ranked by Efficiency]")
         buy_df = get_buy_list()
         for _, row in buy_df.iterrows():
+            new_badge_b = "&nbsp;<span style='color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.68rem; font-style:italic;'>← NEW</span>" if row["is_new"] else ""
             st.markdown(
                 f'<div class="metric-card" style="border-left:7px solid #3ddc84; padding:0.7rem 1rem;">'
                 f'<span style="font-family:JetBrains Mono,monospace; font-weight:700; color:#e8e4d9;">{row["ticker"]}</span>'
                 f'&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="mono" style="color:#e8e4d9; font-size:0.78rem;">${row["current_price"]:.2f}</span>'
-                ("&nbsp;<span style='color:#3ddc84; font-family:JetBrains Mono,monospace; font-size:0.68rem; font-style:italic;'>← NEW</span>" if row["is_new"] else "") +
+                f'{new_badge_b}'
                 f'<span style="float:right; font-family:JetBrains Mono,monospace; font-size:0.72rem;">'
                 f'<span style="color:#e8e4d9;">Upside: </span><span style="color:#3ddc84;">{row["mid_upside"]:.1f}%</span>'
                 f'&nbsp;&nbsp;&nbsp;<span style="color:#e8e4d9;">Target: </span><span style="color:#3ddc84;">${row["mid_fair_target"]:.2f}</span>'
