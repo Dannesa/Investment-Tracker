@@ -562,14 +562,14 @@ def update_price_in_db(table, ticker, new_price, new_score, new_mid_upside=None)
 # ── 8-K TRIGGER ITEMS ────────────────────────────────────────────────────────
 
 EIGHT_K_TRIGGERS = {
-    "5.02": ("Leadership Change",         "🚩"),
-    "1.01": ("Material Agreement / M&A",  "🚩"),
-    "2.01": ("Acquisition / Disposal",    "🚩"),
-    "8.01": ("Regulatory / Legal Action", "🚩"),
-    "2.02": ("Guidance / Earnings Event", "⚠️"),
-    "7.01": ("Reg FD / Guidance Update",  "⚠️"),
-    "3.02": ("Share Dilution Event",      "🚩"),
-    "2.03": ("Debt / Credit Obligation",  "🚩"),
+    "5.02": ("Flag #4: Major Leadership Change",          "🚩"),
+    "2.03": ("Flag #6: Debt Structure Change",            "🚩"),
+    "1.01": ("Flag #7: Acquisition / Merger — Material Agreement", "🚩"),
+    "2.01": ("Flag #7: Acquisition / Merger — Asset Disposal",     "🚩"),
+    "8.01": ("Flag #8: Regulatory / Government Investigation",      "🚩"),
+    "2.02": ("Flag #9: Guidance Cut / Withdrawal",        "⚠️"),
+    "7.01": ("Flag #9: Guidance Update / Reg FD",         "⚠️"),
+    "3.02": ("Flag #10: Share Dilution Event",            "🚩"),
 }
 
 def check_8k_triggers(ticker):
@@ -592,8 +592,8 @@ def check_8k_triggers(ticker):
                 for item_num, (label, emoji) in EIGHT_K_TRIGGERS.items():
                     if item_num in items_str:
                         flags.append(
-                            f"{emoji} {ticker} — 8-K Item {item_num}: {label} "
-                            f"detected — Filed {filing_date_fmt} — review 8-K filing"
+                            f"{emoji} {ticker} — {label} "
+                            f"(8-K Item {item_num}) — Filed {filing_date_fmt} — review 8-K filing"
                         )
             except Exception:
                 continue
@@ -1360,4 +1360,4 @@ elif page == "Market Data Updates":
                     else:
                         st.error(f"{mp_ticker} not found in Hold List.")
 
-# Updated: June 27, 2026 — 5:30 PM — Dream Team 💙🦋
+# Updated: June 27, 2026 — 7:35 PM — Dream Team 💙🦋
