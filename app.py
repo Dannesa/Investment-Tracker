@@ -460,6 +460,87 @@ def fetch_current_fundamentals(ticker):
 
 # ── WRITE HELPERS ─────────────────────────────────────────────────────────────
 
+def unified_verdict_entry(ticker, new_verdict, date_str, notes,
+                           price=None, mid_up=None, mid_ft=None,
+                           mid_fe=None, inst=None):
+    """
+    Single atomic write operation for ALL verdict entries (BUY, HOLD, PASS, HARD_PASS).
+    Enforces One-Ticker-One-Home Rule in code — no manual table management required.
+    Resets baseline snapshot on every BUY or HOLD — structurally non-negotiable.
+    """
+    ticker = ticker.upper().strip()
+    conn = get_conn()
+    c = conn.cursor()
+
+    # ── STEP 1: Detect current home ──────────────────────────────────────────
+    c.execute("SELECT ticker FROM buy_list WHERE ticker=%s", (ticker,))
+    in_buy = c.fetchone() is not None
+    c.execute("SELECT ticker FROM hold_list WHERE ticker=%s", (ticker,))
+    in_hold = c.fetchone() is not None
+
+    # ── STEP 2: Remove from current home (One-Ticker-One-Home enforced) ──────
+    if in_buy:
+        c.execute("DELETE FROM buy_list WHERE ticker=%s", (ticker,))
+    if in_hold:
+        c.execute("DELETE FROM hold_list WHERE ticker=%s", (ticker,))
+
+    # ── STEP 3: Write to new home ─────────────────────────────────────────────
+    if new_verdict == "BUY":
+        score = round(mid_up / price, 2) if price and price > 0 else 0
+        c.execute("UPDATE buy_list SET is_new=0")
+        c.execute("""INSERT INTO buy_list
+            (ticker,current_price,mid_upside,mid_fair_target,capital_efficiency_score,
+             institutional_money,date_added,is_new,notes)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s)
+            ON CONFLICT (ticker) DO UPDATE SET
+                current_price=EXCLUDED.current_price,
+                mid_upside=EXCLUDED.mid_upside,
+                mid_fair_target=EXCLUDED.mid_fair_target,
+                capital_efficiency_score=EXCLUDED.capital_efficiency_score,
+                institutional_money=EXCLUDED.institutional_money,
+                date_added=EXCLUDED.date_added,
+                is_new=1,
+                notes=EXCLUDED.notes""",
+            (ticker, price, mid_up, mid_ft, score, inst or "Pending", date_str, notes))
+
+    elif new_verdict == "HOLD":
+        score = round(mid_up / mid_fe, 2) if mid_fe and mid_fe > 0 else 0
+        c.execute("UPDATE hold_list SET is_new=0")
+        c.execute("""INSERT INTO hold_list
+            (ticker,current_price,mid_upside,mid_fair_entry,mid_fair_target,
+             capital_efficiency_score,date_added,is_new,notes)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s)
+            ON CONFLICT (ticker) DO UPDATE SET
+                current_price=EXCLUDED.current_price,
+                mid_upside=EXCLUDED.mid_upside,
+                mid_fair_entry=EXCLUDED.mid_fair_entry,
+                mid_fair_target=EXCLUDED.mid_fair_target,
+                capital_efficiency_score=EXCLUDED.capital_efficiency_score,
+                date_added=EXCLUDED.date_added,
+                is_new=1,
+                notes=EXCLUDED.notes""",
+            (ticker, price, mid_up, mid_fe, mid_ft, score, date_str, notes))
+
+    # PASS / HARD_PASS — no active list write, master_log only
+
+    conn.commit()
+    conn.close()
+
+    # ── STEP 4: Update Master Log (single row per ticker, updated in place) ──
+    add_master_log(ticker, date_str, new_verdict, notes, is_unified=1)
+
+    # ── STEP 5: Reset baseline — BUY or HOLD only, always, no exceptions ─────
+    if new_verdict in ("BUY", "HOLD") and YFINANCE_AVAILABLE:
+        try:
+            f = fetch_current_fundamentals(ticker)
+            if f:
+                reset_baseline_snapshot(ticker, price, f.get("market_cap"), f.get("shares_outstanding"))
+        except Exception:
+            pass
+
+# ── LEGACY HELPERS — used by auto-routing (Market Data Updates) only ─────────
+# Do NOT call from the Add/Update UI — unified_verdict_entry() handles all manual entries.
+
 def add_or_update_buy(ticker, price, mid_up, mid_ft, inst, date_str, notes):
     ticker = ticker.upper().strip()
     score = round(mid_up / price, 2) if price > 0 else 0
@@ -1026,109 +1107,76 @@ elif page == "Ticker Lookup":
                 unsafe_allow_html=True)
 
 elif page == "Add / Update":
-    st.markdown('<div class="header-block" style="border-left:7px solid #2a7fff;"><h1 style="color:#2a7fff;">Add / Update Ticker</h1><p class="mono" style="color:#8899aa;">HANDOFF line — auto-logs to correct table with Capital Efficiency Score. Resets baseline snapshot on BUY/HOLD entries.</p></div>', unsafe_allow_html=True)
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Add to Buy List", "Add to Hold List", "Log PASS / HARD PASS", "Re-evaluate / Update Verdict", "Remove Ticker"])
+    st.markdown('<div class="header-block" style="border-left:7px solid #2a7fff;"><h1 style="color:#2a7fff;">Add / Update Ticker</h1><p class="mono" style="color:#8899aa;">HANDOFF line — auto-logs to correct table with Capital Efficiency Score. Unified entry point — all verdicts, new or re-evaluation. One-Ticker-One-Home enforced in code. Baseline snapshot resets on every BUY/HOLD.</p></div>', unsafe_allow_html=True)
+    tab_log, tab_remove = st.tabs(["Log Verdict", "Remove Ticker"])
 
-    with tab1:
-        st.markdown("#### Add / Update — Buy List")
-        with st.form("add_buy_form"):
-            col1, col2 = st.columns(2)
-            with col1:
-                b_ticker = st.text_input("Ticker Symbol *").upper().strip()
-                b_price  = st.number_input("Current Price ($) *", min_value=0.01, value=100.00, step=0.01)
-                b_mid_up = st.number_input("Mid Upside (%)", min_value=0.0, value=50.0, step=0.5)
-            with col2:
-                b_mid_ft = st.number_input("Mid Fair Target ($) *", min_value=0.01, value=150.00, step=0.01)
-            b_inst  = st.selectbox("Institutional Money / Tape Reading",
-                ["Pending", "Strong absorption / aggressive buying",
-                 "Neutral / choppy flow", "Distribution / selling pressure"])
-            b_notes = st.text_area("Notes (optional)")
-            b_date  = st.text_input("Date", value=date.today().strftime("%b %d, %Y"))
-            if st.form_submit_button("Add to Buy List"):
-                if not b_ticker:
-                    st.error("Ticker is required.")
-                elif b_price <= 0:
-                    st.error("Price must be greater than 0.")
-                else:
-                    add_or_update_buy(b_ticker, b_price, b_mid_up, b_mid_ft, b_inst, b_date, b_notes)
-                    score = round(b_mid_up / b_price, 2)
-                    st.success(f"{b_ticker} added to Buy List — CE Score: {score:.2f} — Mid Fair Target: ${b_mid_ft:.2f} — Baseline snapshot reset ✅")
+    with tab_log:
+        st.markdown("#### Log Verdict")
+        st.markdown(
+            '<p class="mono" style="color:#8899aa; font-size:0.83rem;">'
+            'Single entry point for all verdicts — new or re-evaluation. '
+            'One-Ticker-One-Home enforced automatically. '
+            'Baseline snapshot resets on every BUY or HOLD — no exceptions.'
+            '</p>', unsafe_allow_html=True)
+        with st.form("log_verdict_form"):
+            col_t, col_v = st.columns([1, 1])
+            with col_t:
+                lv_ticker  = st.text_input("Ticker Symbol *").upper().strip()
+            with col_v:
+                lv_verdict = st.selectbox("Verdict *", ["BUY", "HOLD", "PASS", "HARD_PASS"])
+            lv_notes = st.text_area("Notes / reason for verdict")
+            lv_date  = st.text_input("Date", value=date.today().strftime("%b %d, %Y"))
 
-    with tab2:
-        st.markdown("#### Add / Update — Hold List")
-        with st.form("add_hold_form"):
-            col1, col2 = st.columns(2)
-            with col1:
-                h_ticker = st.text_input("Ticker Symbol *").upper().strip()
-                h_price  = st.number_input("Current Price ($) *", min_value=0.01, value=100.00, step=0.01)
-                h_mid_up = st.number_input("Mid Upside (%)", min_value=0.0, value=40.0, step=0.5)
-            with col2:
-                h_mid_fe = st.number_input("Mid Fair Entry ($) *", min_value=0.01, value=80.00, step=0.01)
-                h_mid_ft = st.number_input("Mid Fair Target ($) *", min_value=0.01, value=120.00, step=0.01)
-            h_notes = st.text_area("Notes (optional)")
-            h_date  = st.text_input("Date", value=date.today().strftime("%b %d, %Y"))
-            if st.form_submit_button("Add to Hold List"):
-                if not h_ticker:
-                    st.error("Ticker is required.")
-                else:
-                    add_or_update_hold(h_ticker, h_price, h_mid_up, h_mid_fe, h_mid_ft, h_date, h_notes)
-                    score = round(h_mid_up / h_mid_fe, 2)
-                    st.success(f"{h_ticker} added to Hold List — CE Score: {score:.2f} — Mid Fair Entry: ${h_mid_fe:.2f} — Mid Fair Target: ${h_mid_ft:.2f} — Baseline snapshot reset ✅")
-
-    with tab3:
-        st.markdown("#### Log PASS or HARD PASS")
-        with st.form("add_pass_form"):
-            p_ticker  = st.text_input("Ticker Symbol *").upper().strip()
-            p_verdict = st.radio("Verdict", ["PASS", "HARD_PASS"])
-            p_notes   = st.text_area("Notes / reason")
-            p_date    = st.text_input("Date", value=date.today().strftime("%b %d, %Y"))
-            if st.form_submit_button("Log to Master Consolidated Log"):
-                if not p_ticker:
-                    st.error("Ticker is required.")
-                else:
-                    add_master_log(p_ticker, p_date, p_verdict, p_notes, is_unified=1)
-                    st.success(f"{p_ticker} added — {p_date} — {'HARD PASS' if p_verdict == 'HARD_PASS' else 'PASS'}")
-
-    with tab4:
-        st.markdown("#### Re-evaluate / Update Verdict")
-        st.markdown('<p class="mono" style="color:#8899aa; font-size:0.83rem;">A new verdict updates the Master Log in place. If BUY or HOLD, baseline snapshot resets automatically.</p>', unsafe_allow_html=True)
-        with st.form("re_eval_form"):
-            re_ticker  = st.text_input("Ticker Symbol *").upper().strip()
-            re_verdict = st.selectbox("New Verdict", ["BUY", "HOLD", "PASS", "HARD_PASS"])
-            re_notes   = st.text_area("Re-evaluation notes / reason for change")
-            re_date    = st.text_input("Date", value=date.today().strftime("%b %d, %Y"))
             st.markdown("---")
-            st.markdown('<p class="mono" style="color:#555e6e; font-size:0.8rem;">Fill in below ONLY if new verdict is BUY or HOLD — otherwise leave defaults.</p>', unsafe_allow_html=True)
+            st.markdown(
+                '<p class="mono" style="color:#555e6e; font-size:0.8rem;">'
+                'BUY → Price, Mid Upside, Mid Fair Target, Institutional required. &nbsp;|&nbsp; '
+                'HOLD → Price, Mid Upside, Mid Fair Entry, Mid Fair Target required. &nbsp;|&nbsp; '
+                'PASS / HARD PASS → leave price fields at defaults.'
+                '</p>', unsafe_allow_html=True)
+
             col1, col2 = st.columns(2)
             with col1:
-                re_price  = st.number_input("Current Price ($)", min_value=0.01, value=100.00, step=0.01)
-                re_mid_up = st.number_input("Mid Upside (%)", min_value=0.0, value=40.0, step=0.5)
-                re_mid_ft = st.number_input("Mid Fair Target ($)", min_value=0.01, value=150.00, step=0.01)
+                lv_price  = st.number_input("Current Price ($)", min_value=0.01, value=100.00, step=0.01)
+                lv_mid_up = st.number_input("Mid Upside (%)", min_value=0.0, value=50.0, step=0.5)
+                lv_mid_ft = st.number_input("Mid Fair Target ($) — manual input only", min_value=0.01, value=150.00, step=0.01)
             with col2:
-                re_mid_fe = st.number_input("Mid Fair Entry ($) — Hold only", min_value=0.01, value=80.00, step=0.01)
-                re_inst   = st.selectbox("Institutional Money — Buy only",
+                lv_mid_fe = st.number_input("Mid Fair Entry ($) — HOLD only", min_value=0.01, value=80.00, step=0.01)
+                lv_inst   = st.selectbox("Institutional Money / Tape Reading — BUY only",
                     ["Pending", "Strong absorption / aggressive buying",
                      "Neutral / choppy flow", "Distribution / selling pressure"])
-            if st.form_submit_button("Submit Re-evaluation"):
-                if not re_ticker:
-                    st.error("Ticker is required.")
-                else:
-                    if re_verdict == "BUY":
-                        add_or_update_buy(re_ticker, re_price, re_mid_up, re_mid_ft, re_inst, re_date, re_notes)
-                        score = round(re_mid_up / re_price, 2)
-                        st.success(f"✅ {re_ticker} → BUY | CE Score: {score:.2f} | Mid Fair Target: ${re_mid_ft:.2f} | Baseline reset ✅")
-                    elif re_verdict == "HOLD":
-                        add_or_update_hold(re_ticker, re_price, re_mid_up, re_mid_fe, re_mid_ft, re_date, re_notes)
-                        score = round(re_mid_up / re_mid_fe, 2)
-                        st.success(f"⚠️ {re_ticker} → HOLD | CE Score: {score:.2f} | Mid Fair Target: ${re_mid_ft:.2f} | Baseline reset ✅")
-                    elif re_verdict == "PASS":
-                        add_master_log(re_ticker, re_date, "PASS", re_notes, is_unified=1)
-                        st.success(f"❌ {re_ticker} → PASS | Master Log updated.")
-                    elif re_verdict == "HARD_PASS":
-                        add_master_log(re_ticker, re_date, "HARD_PASS", re_notes, is_unified=1)
-                        st.success(f"🚫 {re_ticker} → HARD PASS | Master Log updated.")
 
-    with tab5:
+            if st.form_submit_button("Submit Verdict"):
+                if not lv_ticker:
+                    st.error("Ticker is required.")
+                elif lv_verdict == "BUY" and lv_price <= 0:
+                    st.error("Price must be greater than 0 for BUY verdict.")
+                elif lv_verdict == "HOLD" and (lv_price <= 0 or lv_mid_fe <= 0):
+                    st.error("Price and Mid Fair Entry must be greater than 0 for HOLD verdict.")
+                else:
+                    unified_verdict_entry(
+                        ticker=lv_ticker,
+                        new_verdict=lv_verdict,
+                        date_str=lv_date,
+                        notes=lv_notes,
+                        price=lv_price,
+                        mid_up=lv_mid_up,
+                        mid_ft=lv_mid_ft,
+                        mid_fe=lv_mid_fe,
+                        inst=lv_inst,
+                    )
+                    if lv_verdict == "BUY":
+                        score = round(lv_mid_up / lv_price, 2)
+                        st.success(f"✅ {lv_ticker} → BUY | CE Score: {score:.2f} | Mid Fair Target: ${lv_mid_ft:.2f} | Baseline snapshot reset ✅")
+                    elif lv_verdict == "HOLD":
+                        score = round(lv_mid_up / lv_mid_fe, 2)
+                        st.success(f"⚠️ {lv_ticker} → HOLD | CE Score: {score:.2f} | Mid Fair Entry: ${lv_mid_fe:.2f} | Mid Fair Target: ${lv_mid_ft:.2f} | Baseline snapshot reset ✅")
+                    elif lv_verdict == "PASS":
+                        st.success(f"❌ {lv_ticker} → PASS | Master Log updated.")
+                    elif lv_verdict == "HARD_PASS":
+                        st.success(f"🚫 {lv_ticker} → HARD PASS | Master Log updated.")
+
+    with tab_remove:
         st.markdown("#### Remove Ticker from Active List")
         st.markdown('<p class="mono" style="color:#cc3333; font-size:0.85rem;">One-Ticker-One-Home Rule: remove before moving to new list.</p>', unsafe_allow_html=True)
         col_r1, col_r2 = st.columns(2)
@@ -1350,4 +1398,4 @@ elif page == "Market Data Updates":
                     else:
                         st.error(f"{mp_ticker} not found in Hold List.")
 
-# Updated: June 28, 2026 — 1:30 AM — Dream Team 💙🦋
+# Updated: June 28, 2026 — 11:15 AM — Dream Team 💙🦋
