@@ -111,14 +111,17 @@ def _get_persistent_conn():
     return psycopg2.connect(db_url)
 
 def get_conn():
-    conn = _get_persistent_conn()
     try:
+        conn = _get_persistent_conn()
         conn.cursor().execute("SELECT 1")
+        return conn
     except Exception:
-        conn = psycopg2.connect(st.secrets["supabase"]["db_url"])
-        # Update the cached resource
         _get_persistent_conn.clear()
-    return conn
+        try:
+            return _get_persistent_conn()
+        except Exception as e:
+            st.error(f"⚠️ Database connection failed — please refresh the app. ({e})")
+            st.stop()
 
 # ── DB INIT ───────────────────────────────────────────────────────────────────
 
@@ -167,6 +170,19 @@ def init_db():
         market_cap REAL DEFAULT 0,
         shares_outstanding REAL DEFAULT 0,
         baseline_date TEXT
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS flag_log (
+        id SERIAL PRIMARY KEY,
+        ticker TEXT NOT NULL,
+        flag_key TEXT NOT NULL UNIQUE,
+        flag_type TEXT NOT NULL,
+        flag_message TEXT NOT NULL,
+        flagged_date TEXT NOT NULL,
+        tier INTEGER DEFAULT 1,
+        acknowledged INTEGER DEFAULT 0,
+        acknowledged_date TEXT DEFAULT '',
+        outcome TEXT DEFAULT ''
     )""")
 
     # Safe migrations — add columns if not already present
@@ -643,9 +659,69 @@ EIGHT_K_TRIGGERS = {
     "3.02": ("Flag #10: Share Dilution Event",            "🚩"),
 }
 
-def check_8k_triggers(ticker):
+# ── FLAG LOG HELPERS ──────────────────────────────────────────────────────────
+
+def get_acknowledged_keys():
+    """Return a set of all acknowledged flag_key values."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT flag_key FROM flag_log WHERE acknowledged=1")
+    rows = c.fetchall()
+    conn.close()
+    return {r[0] for r in rows}
+
+def upsert_flag(ticker, flag_key, flag_type, flag_message, tier=1):
+    """Write a new flag to flag_log if it doesn't already exist."""
+    today = date.today().strftime("%b %d, %Y")
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO flag_log (ticker, flag_key, flag_type, flag_message, flagged_date, tier)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (flag_key) DO NOTHING
+    """, (ticker, flag_key, flag_type, flag_message, today, tier))
+    conn.commit()
+    conn.close()
+
+def acknowledge_flag(flag_key, outcome="Reviewed — cleared"):
+    """Mark a flag as acknowledged."""
+    today = date.today().strftime("%b %d, %Y")
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        UPDATE flag_log SET acknowledged=1, acknowledged_date=%s, outcome=%s
+        WHERE flag_key=%s
+    """, (today, outcome, flag_key))
+    conn.commit()
+    conn.close()
+
+def get_active_flags():
+    """Return all unacknowledged flags, ordered by ticker."""
+    conn = get_conn()
+    df = pd.read_sql(
+        "SELECT * FROM flag_log WHERE acknowledged=0 ORDER BY ticker, flagged_date DESC",
+        conn)
+    conn.close()
+    return df
+
+def get_flag_history():
+    """Return all acknowledged flags for audit trail."""
+    conn = get_conn()
+    df = pd.read_sql(
+        "SELECT * FROM flag_log WHERE acknowledged=1 ORDER BY acknowledged_date DESC, ticker",
+        conn)
+    conn.close()
+    return df
+
+def check_8k_triggers(ticker, acknowledged_keys):
+    """
+    Check SEC EDGAR 8-K filings within 90-day lookback.
+    Skips filings whose flag_key is already acknowledged.
+    Each filing is uniquely keyed by ticker + item_num + filing_date — so a new
+    filing of the same type always fires fresh, regardless of prior acknowledgments.
+    """
     if not EDGAR_AVAILABLE:
-        return ["⚠️ EdgarTools not installed — 8-K checks skipped. Run: pip install edgartools"]
+        return []
     flags = []
     cutoff = date.today() - timedelta(days=90)
     try:
@@ -659,64 +735,106 @@ def check_8k_triggers(ticker):
                 if filing_date < cutoff:
                     break
                 items_str = str(getattr(filing, "items", "") or "")
-                filing_date_fmt = filing_date.strftime("%b %d, %Y")
+                filing_date_fmt = filing_date.strftime("%Y-%m-%d")
                 for item_num, (label, emoji) in EIGHT_K_TRIGGERS.items():
                     if item_num in items_str:
-                        flags.append(
-                            f"{emoji} {ticker} — {label} "
-                            f"(8-K Item {item_num}) — Filed {filing_date_fmt} — review 8-K filing"
-                        )
+                        flag_key = f"{ticker}-8K-{item_num}-{filing_date_fmt}"
+                        if flag_key in acknowledged_keys:
+                            continue  # Already reviewed — skip
+                        msg = (f"{emoji} {ticker} — {label} "
+                               f"(8-K Item {item_num}) — Filed {filing_date.strftime('%b %d, %Y')} "
+                               f"— review 8-K filing")
+                        upsert_flag(ticker, flag_key, f"8K-{item_num}", msg, tier=1)
+                        flags.append((flag_key, msg))
             except Exception:
                 continue
     except Exception:
-        flags.append(
-            f"⚠️ {ticker} — 8-K lookup failed — manual SEC EDGAR check required "
-            f"— ticker held pending review"
-        )
+        flag_key = f"{ticker}-8K-LOOKUP-FAILED-{date.today().strftime('%Y-%m-%d')}"
+        if flag_key not in acknowledged_keys:
+            msg = (f"⚠️ {ticker} — 8-K lookup failed — manual SEC EDGAR check required "
+                   f"— ticker held pending review")
+            upsert_flag(ticker, flag_key, "8K-LOOKUP-FAIL", msg, tier=1)
+            flags.append((flag_key, msg))
     return flags
 
 # ── HARD TRIGGER GATE ─────────────────────────────────────────────────────────
 
 def run_hard_trigger_gate(all_tickers_df):
+    """
+    Screens all tickers for hard trigger conditions.
+    
+    Quantitative flags (Price, FCF, Share Count):
+      - Tier 1 thresholds: ±20% price, 1 negative FCF Q, ±5% share count
+      - Tier 2 thresholds: ±30% price, 2 consecutive negative FCF Qs (auto-fail), ±10% share count
+      - Once a Tier 1 flag is acknowledged, it re-fires ONLY if the condition
+        worsens to Tier 2 threshold.
+    
+    8-K flags:
+      - Keyed by ticker + item number + filing date.
+      - Each new filing always fires fresh regardless of prior acknowledgments.
+      - Acknowledged filings are permanently suppressed until they age out of 90-day window.
+    """
     blocked = {}
     clear = []
+    today_str = date.today().strftime("%Y-%m-%d")
+    acknowledged_keys = get_acknowledged_keys()
+
     conn = get_conn()
     c = conn.cursor()
 
     for _, row in all_tickers_df.iterrows():
         t = row["ticker"]
         current_price = row["current_price"]
-        ticker_flags = []
+        ticker_flags = []  # list of (flag_key, message) tuples
 
         c.execute("""SELECT price, market_cap, shares_outstanding, baseline_date
                      FROM price_history WHERE ticker=%s""", (t,))
         bl = c.fetchone()
-        baseline_price  = bl[0] if bl else None
-        baseline_shares = bl[2] if bl else None
+        baseline_price    = bl[0] if bl else None
+        baseline_shares   = bl[2] if bl else None
         baseline_date_str = bl[3] if bl else "unknown"
 
+        # ── FLAG #1: Price movement — tiered ─────────────────────────────────
         if baseline_price and baseline_price > 0:
             pct_move = abs(current_price - baseline_price) / baseline_price * 100
-            if pct_move >= 20:
-                direction = "+" if current_price > baseline_price else "-"
-                ticker_flags.append(
-                    f"🚩 {t} — Flag #1: Price moved {direction}{pct_move:.1f}% from baseline "
-                    f"(${baseline_price:.2f} on {baseline_date_str} → ${current_price:.2f}) — review required"
-                )
+            direction = "+" if current_price > baseline_price else "-"
+            base_msg  = (f"(${baseline_price:.2f} on {baseline_date_str} "
+                         f"→ ${current_price:.2f})")
 
+            if pct_move >= 30:
+                fk = f"{t}-FLAG1-T2-{today_str}"
+                if fk not in acknowledged_keys:
+                    msg = (f"🚩 {t} — Flag #1 TIER 2: Price moved {direction}{pct_move:.1f}% "
+                           f"from baseline {base_msg} — EXCEEDS ±30% — Unified re-analysis required")
+                    upsert_flag(t, fk, "FLAG1-PRICE", msg, tier=2)
+                    ticker_flags.append((fk, msg))
+            elif pct_move >= 20:
+                fk = f"{t}-FLAG1-T1-{today_str}"
+                # Only fire Tier 1 if neither tier is already acknowledged
+                t1_ack = any(k for k in acknowledged_keys if k.startswith(f"{t}-FLAG1-"))
+                if not t1_ack:
+                    msg = (f"🚩 {t} — Flag #1: Price moved {direction}{pct_move:.1f}% "
+                           f"from baseline {base_msg} — review required")
+                    upsert_flag(t, fk, "FLAG1-PRICE", msg, tier=1)
+                    ticker_flags.append((fk, msg))
+
+        # ── Fundamentals fetch ────────────────────────────────────────────────
         fundamentals = None
         if YFINANCE_AVAILABLE:
             fundamentals = fetch_current_fundamentals(t)
 
         if fundamentals is None:
-            ticker_flags.append(
-                f"⚠️ {t} — Fundamentals unavailable from yfinance — manual review required"
-            )
+            fk = f"{t}-FUNDAMENTALS-UNAVAILABLE-{today_str}"
+            if fk not in acknowledged_keys:
+                msg = f"⚠️ {t} — Fundamentals unavailable from yfinance — manual review required"
+                upsert_flag(t, fk, "FUNDAMENTALS", msg, tier=1)
+                ticker_flags.append((fk, msg))
         else:
             current_shares = fundamentals.get("shares_outstanding")
             fcf_values     = fundamentals.get("fcf_values", [])
             rev_growth     = fundamentals.get("revenue_growth_rates", [])
 
+            # ── FLAG #2: Revenue deceleration (not tiered — condition-based) ─
             if len(rev_growth) >= 2:
                 latest   = rev_growth[-1]
                 previous = rev_growth[-2]
@@ -724,66 +842,100 @@ def run_hard_trigger_gate(all_tickers_df):
                 below8   = latest < 8.0
                 consec   = len(rev_growth) >= 3 and (rev_growth[-2] - rev_growth[-3]) > 0
                 cn       = " (2+ consecutive periods)" if consec else ""
+                fk_base  = f"{t}-FLAG2"
 
                 if decel >= 5.0 and below8:
-                    ticker_flags.append(
-                        f"🚩 {t} — Flag #2: Revenue deceleration{cn}: "
-                        f"{previous:.1f}% → {latest:.1f}% YoY ({decel:.1f}pt drop) "
-                        f"— BELOW 8% CRITICAL THRESHOLD — AUTOMATIC FAIL"
-                    )
+                    fk = f"{fk_base}-AUTOFAIL-{today_str}"
+                    if not any(k for k in acknowledged_keys if k.startswith(fk_base)):
+                        msg = (f"🚩 {t} — Flag #2: Revenue deceleration{cn}: "
+                               f"{previous:.1f}% → {latest:.1f}% YoY ({decel:.1f}pt drop) "
+                               f"— BELOW 8% CRITICAL THRESHOLD — AUTOMATIC FAIL")
+                        upsert_flag(t, fk, "FLAG2-REV", msg, tier=2)
+                        ticker_flags.append((fk, msg))
                 elif decel >= 5.0:
-                    ticker_flags.append(
-                        f"🚩 {t} — Flag #2: Revenue deceleration{cn}: "
-                        f"{previous:.1f}% → {latest:.1f}% YoY ({decel:.1f}pt drop) "
-                        f"— Hard Trigger — deeper review required"
-                    )
+                    fk = f"{fk_base}-T1-{today_str}"
+                    if not any(k for k in acknowledged_keys if k.startswith(fk_base)):
+                        msg = (f"🚩 {t} — Flag #2: Revenue deceleration{cn}: "
+                               f"{previous:.1f}% → {latest:.1f}% YoY ({decel:.1f}pt drop) "
+                               f"— Hard Trigger — deeper review required")
+                        upsert_flag(t, fk, "FLAG2-REV", msg, tier=1)
+                        ticker_flags.append((fk, msg))
                 elif 3.0 <= decel < 5.0:
-                    crit = " — CRITICAL NOTE: also below 8% low growth tier" if below8 else ""
-                    ticker_flags.append(
-                        f"⚠️ {t} — Flag #2: Yellow Flag — mild revenue deceleration: "
-                        f"{previous:.1f}% → {latest:.1f}% YoY ({decel:.1f}pt drop){crit}"
-                    )
+                    fk = f"{fk_base}-YELLOW-{today_str}"
+                    if not any(k for k in acknowledged_keys if k.startswith(fk_base)):
+                        crit = " — CRITICAL NOTE: also below 8% low growth tier" if below8 else ""
+                        msg = (f"⚠️ {t} — Flag #2: Yellow Flag — mild revenue deceleration: "
+                               f"{previous:.1f}% → {latest:.1f}% YoY ({decel:.1f}pt drop){crit}")
+                        upsert_flag(t, fk, "FLAG2-REV", msg, tier=1)
+                        ticker_flags.append((fk, msg))
                 elif below8 and decel >= 0:
-                    ticker_flags.append(
-                        f"⚠️ {t} — Flag #2: Yellow Flag — revenue growth at {latest:.1f}% "
-                        f"— Critical note: low growth tier (below 8% threshold)"
-                    )
+                    fk = f"{fk_base}-LOWGROWTH-{today_str}"
+                    if not any(k for k in acknowledged_keys if k.startswith(fk_base)):
+                        msg = (f"⚠️ {t} — Flag #2: Yellow Flag — revenue growth at {latest:.1f}% "
+                               f"— Critical note: low growth tier (below 8% threshold)")
+                        upsert_flag(t, fk, "FLAG2-REV", msg, tier=1)
+                        ticker_flags.append((fk, msg))
 
+            # ── FLAG #3: FCF — tiered ─────────────────────────────────────────
             if fcf_values:
                 mrq = fcf_values[0]
                 if mrq < 0:
                     if len(fcf_values) >= 2 and fcf_values[1] < 0:
-                        ticker_flags.append(
-                            f"🚩 {t} — Flag #3: FCF NEGATIVE 2+ CONSECUTIVE QUARTERS "
-                            f"(most recent: ${mrq/1e6:.1f}M | prior: ${fcf_values[1]/1e6:.1f}M) "
-                            f"— AUTOMATIC FAIL"
-                        )
+                        fk = f"{t}-FLAG3-T2-{today_str}"
+                        if fk not in acknowledged_keys:
+                            msg = (f"🚩 {t} — Flag #3 TIER 2: FCF NEGATIVE 2+ CONSECUTIVE QUARTERS "
+                                   f"(most recent: ${mrq/1e6:.1f}M | prior: ${fcf_values[1]/1e6:.1f}M) "
+                                   f"— AUTOMATIC FAIL")
+                            upsert_flag(t, fk, "FLAG3-FCF", msg, tier=2)
+                            ticker_flags.append((fk, msg))
                     else:
-                        ticker_flags.append(
-                            f"🚩 {t} — Flag #3: FCF NEGATIVE "
-                            f"(most recent quarter: ${mrq/1e6:.1f}M) — immediate review required"
-                        )
+                        fk = f"{t}-FLAG3-T1-{today_str}"
+                        t1_ack = any(k for k in acknowledged_keys if k.startswith(f"{t}-FLAG3-"))
+                        if not t1_ack:
+                            msg = (f"🚩 {t} — Flag #3: FCF NEGATIVE "
+                                   f"(most recent quarter: ${mrq/1e6:.1f}M) — immediate review required")
+                            upsert_flag(t, fk, "FLAG3-FCF", msg, tier=1)
+                            ticker_flags.append((fk, msg))
 
+            # ── FLAG #5: Share count — tiered ─────────────────────────────────
             if baseline_shares and baseline_shares > 0 and current_shares and current_shares > 0:
                 expected_mktcap = current_price * baseline_shares
                 actual_mktcap   = current_price * current_shares
                 share_pct = (actual_mktcap - expected_mktcap) / expected_mktcap * 100
-                if abs(share_pct) >= 5.0:
-                    if share_pct > 0:
-                        ticker_flags.append(
-                            f"🚩 {t} — Flag #5: Share count increased {share_pct:.1f}% since baseline "
-                            f"(baseline: {baseline_shares/1e6:.1f}M → current: {current_shares/1e6:.1f}M) "
-                            f"— potential dilution event — review required"
-                        )
-                    else:
-                        ticker_flags.append(
-                            f"✅ {t} — Flag #5: Share count decreased {abs(share_pct):.1f}% since baseline "
-                            f"(baseline: {baseline_shares/1e6:.1f}M → current: {current_shares/1e6:.1f}M) "
-                            f"— significant buyback — noted"
-                        )
 
-        ticker_flags.extend(check_8k_triggers(t))
+                if share_pct > 0:  # dilution
+                    if share_pct >= 10.0:
+                        fk = f"{t}-FLAG5-T2-{today_str}"
+                        if fk not in acknowledged_keys:
+                            msg = (f"🚩 {t} — Flag #5 TIER 2: Share count increased {share_pct:.1f}% "
+                                   f"since baseline (baseline: {baseline_shares/1e6:.1f}M → "
+                                   f"current: {current_shares/1e6:.1f}M) — significant dilution — "
+                                   f"Unified re-analysis required")
+                            upsert_flag(t, fk, "FLAG5-SHARES", msg, tier=2)
+                            ticker_flags.append((fk, msg))
+                    elif share_pct >= 5.0:
+                        fk = f"{t}-FLAG5-T1-{today_str}"
+                        t1_ack = any(k for k in acknowledged_keys if k.startswith(f"{t}-FLAG5-"))
+                        if not t1_ack:
+                            msg = (f"🚩 {t} — Flag #5: Share count increased {share_pct:.1f}% "
+                                   f"since baseline (baseline: {baseline_shares/1e6:.1f}M → "
+                                   f"current: {current_shares/1e6:.1f}M) — potential dilution — "
+                                   f"review required")
+                            upsert_flag(t, fk, "FLAG5-SHARES", msg, tier=1)
+                            ticker_flags.append((fk, msg))
+                elif share_pct <= -5.0:  # buyback — informational only, never blocks
+                    fk = f"{t}-FLAG5-BUYBACK-{today_str}"
+                    if fk not in acknowledged_keys:
+                        msg = (f"✅ {t} — Flag #5: Share count decreased {abs(share_pct):.1f}% "
+                               f"since baseline (baseline: {baseline_shares/1e6:.1f}M → "
+                               f"current: {current_shares/1e6:.1f}M) — significant buyback — noted")
+                        upsert_flag(t, fk, "FLAG5-BUYBACK", msg, tier=1)
+                        # Buybacks are informational — do NOT add to ticker_flags (won't block)
 
+        # ── 8-K flags ─────────────────────────────────────────────────────────
+        ticker_flags.extend(check_8k_triggers(t, acknowledged_keys))
+
+        # ── Route: blocked or clear ───────────────────────────────────────────
         if ticker_flags:
             blocked[t] = ticker_flags
         else:
@@ -1222,7 +1374,8 @@ elif page == "Market Data Updates":
         '<h1 style="color:#2a7fff;">Market Data Updates</h1>'
         '<p class="mono" style="color:#8899aa; font-size:0.72rem;">'
         'Step 1: Hard Trigger Gate screens ALL tickers before any DB writes. '
-        'Steps 2+: Price refresh + CE Score recalc + 3-tier routing — ✅ All Clear tickers only.'
+        'Steps 2+: Price refresh + CE Score recalc + 3-tier routing — ✅ All Clear tickers only. '
+        'Flags persist until acknowledged — no re-firing on already-reviewed events.'
         '</p></div>', unsafe_allow_html=True)
 
     if not YFINANCE_AVAILABLE:
@@ -1280,6 +1433,44 @@ elif page == "Market Data Updates":
 
     st.markdown("---")
 
+    # ── ACTIVE FLAGS PANEL ─────────────────────────────────────────────────────
+    active_flags_df = get_active_flags()
+    if not active_flags_df.empty:
+        st.markdown(
+            '<div class="metric-card" style="border:2px solid #ff6b6b; border-left:7px solid #ff6b6b;">'
+            '<p class="mono" style="color:#ff6b6b; font-weight:700; margin:0;">🚫 ACTIVE FLAGS — PENDING REVIEW & ACKNOWLEDGMENT</p>'
+            '<p class="mono" style="color:#8899aa; font-size:0.78rem; margin:0.3rem 0;">'
+            'Flagged tickers are frozen — zero DB writes until acknowledged. '
+            'Acknowledge each flag after review to clear it. '
+            '8-K flags: tied to specific filing date — a new filing always fires fresh. '
+            'Quant flags: re-fire only if condition worsens to Tier 2 threshold.'
+            '</p></div>', unsafe_allow_html=True)
+
+        grouped = active_flags_df.groupby("ticker")
+        for ticker_name, group in grouped:
+            tier2 = any(group["tier"] == 2)
+            border_color = "#cc3333" if tier2 else "#ff6b6b"
+            st.markdown(
+                f'<div class="metric-card" style="border-left:7px solid {border_color}; margin-bottom:0.3rem;">'
+                f'<p class="mono" style="color:{border_color}; font-weight:700; margin:0 0 0.4rem 0;">'
+                f'🔒 {ticker_name}{"  ⚠️ TIER 2 — Unified re-analysis required" if tier2 else " — FROZEN"}'
+                f'</p></div>', unsafe_allow_html=True)
+            for _, flag_row in group.iterrows():
+                col_msg, col_btn = st.columns([5, 1])
+                with col_msg:
+                    tier_label = f' <span style="color:#cc3333; font-size:0.72rem;">[TIER 2]</span>' if flag_row["tier"] == 2 else ""
+                    st.markdown(
+                        f'<p class="mono" style="margin:0.1rem 0 0.1rem 1rem; color:#e8e4d9; font-size:0.82rem;">'
+                        f'{flag_row["flag_message"]}{tier_label}<br>'
+                        f'<span style="color:#555e6e; font-size:0.72rem;">Flagged: {flag_row["flagged_date"]}</span>'
+                        f'</p>', unsafe_allow_html=True)
+                with col_btn:
+                    if st.button("Acknowledge", key=f"ack_{flag_row['flag_key']}"):
+                        acknowledge_flag(flag_row["flag_key"])
+                        st.rerun()
+        st.markdown("---")
+
+    # ── RUN UPDATE BUTTON ──────────────────────────────────────────────────────
     if st.button("RUN MARKET DATA UPDATE", type="primary"):
         with st.spinner("Step 1: Hard Trigger Gate — screening all tickers before any updates..."):
             result, error = run_market_data_update()
@@ -1293,17 +1484,17 @@ elif page == "Market Data Updates":
                 st.markdown("---")
                 st.markdown(
                     '<div class="metric-card" style="border:2px solid #ff6b6b; border-left:7px solid #ff6b6b;">'
-                    '<p class="mono" style="color:#ff6b6b; font-weight:700; margin:0;">🚫 HARD TRIGGER GATE — TICKERS HELD PENDING MANUAL REVIEW</p>'
-                    '<p class="mono" style="color:#8899aa; font-size:0.78rem; margin:0.3rem 0;">Frozen in current position. Zero DB writes. Resolve flags before next update.</p>'
+                    '<p class="mono" style="color:#ff6b6b; font-weight:700; margin:0;">🚫 NEW FLAGS DETECTED THIS RUN — TICKERS HELD PENDING REVIEW</p>'
+                    '<p class="mono" style="color:#8899aa; font-size:0.78rem; margin:0.3rem 0;">Scroll up to the Active Flags panel to review and acknowledge.</p>'
                     '</div>', unsafe_allow_html=True)
-                for ticker, flags in result["blocked"].items():
+                for ticker_name, flags in result["blocked"].items():
                     flag_html = "".join(
-                        f'<p class="trigger-block" style="margin:0.2rem 0 0.2rem 1rem;">{f}</p>'
-                        for f in flags
+                        f'<p class="trigger-block" style="margin:0.2rem 0 0.2rem 1rem;">{msg}</p>'
+                        for _, msg in flags
                     )
                     st.markdown(
                         f'<div class="metric-card" style="border-left:7px solid #ff6b6b; margin-bottom:0.4rem;">'
-                        f'<p class="mono" style="color:#ff6b6b; font-weight:700; margin:0 0 0.4rem 0;">🔒 {ticker} — FROZEN</p>'
+                        f'<p class="mono" style="color:#ff6b6b; font-weight:700; margin:0 0 0.4rem 0;">🔒 {ticker_name} — FROZEN</p>'
                         f'{flag_html}</div>', unsafe_allow_html=True)
 
             st.markdown("---")
@@ -1398,4 +1589,19 @@ elif page == "Market Data Updates":
                     else:
                         st.error(f"{mp_ticker} not found in Hold List.")
 
-# Updated: June 28, 2026 — 11:15 AM — Dream Team 💙🦋
+    # ── FLAG HISTORY (AUDIT TRAIL) ─────────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("📋 Flag History — Acknowledged Flags (Audit Trail)"):
+        history_df = get_flag_history()
+        if history_df.empty:
+            st.markdown('<p class="mono" style="color:#8899aa;">No acknowledged flags yet.</p>', unsafe_allow_html=True)
+        else:
+            for _, hr in history_df.iterrows():
+                st.markdown(
+                    f'<p class="mono" style="color:#555e6e; font-size:0.78rem; margin:0.2rem 0;">'
+                    f'✅ <strong style="color:#8899aa;">{hr["ticker"]}</strong> — '
+                    f'{hr["flag_message"]} — '
+                    f'<em>Acknowledged: {hr["acknowledged_date"]}</em>'
+                    f'</p>', unsafe_allow_html=True)
+
+# Updated: June 29, 2026 — 7:20 PM — Dream Team 💙🦋
