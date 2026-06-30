@@ -542,6 +542,9 @@ def unified_verdict_entry(ticker, new_verdict, date_str, notes,
     conn.commit()
     conn.close()
 
+    # ── STEP 3.5: New verdict = new chapter — wipe old flag history ──────────
+    purge_flags_for_ticker(ticker, reason=f"Re-verdicted to {new_verdict} — {date_str}")
+
     # ── STEP 4: Update Master Log (single row per ticker, updated in place) ──
     add_master_log(ticker, date_str, new_verdict, notes, is_unified=1)
 
@@ -704,14 +707,48 @@ def get_active_flags():
     conn.close()
     return df
 
-def get_flag_history():
-    """Return all acknowledged flags for audit trail."""
+def get_flag_history(days_back=90, show_all=False):
+    """Return acknowledged flags for audit trail.
+    By default, only shows flags acknowledged within the last N days.
+    Pass show_all=True to bypass the date filter entirely."""
     conn = get_conn()
-    df = pd.read_sql(
-        "SELECT * FROM flag_log WHERE acknowledged=1 ORDER BY acknowledged_date DESC, ticker",
-        conn)
+    if show_all:
+        df = pd.read_sql(
+            "SELECT * FROM flag_log WHERE acknowledged=1 ORDER BY acknowledged_date DESC, ticker",
+            conn)
+    else:
+        cutoff = (date.today() - timedelta(days=days_back)).strftime("%b %d, %Y")
+        # acknowledged_date is stored as "%b %d, %Y" — parse-safe comparison via Python filter
+        df_all = pd.read_sql(
+            "SELECT * FROM flag_log WHERE acknowledged=1 ORDER BY acknowledged_date DESC, ticker",
+            conn)
+        if not df_all.empty:
+            cutoff_date = date.today() - timedelta(days=days_back)
+            def _in_range(d_str):
+                try:
+                    return datetime.strptime(d_str, "%b %d, %Y").date() >= cutoff_date
+                except Exception:
+                    return True  # malformed/blank dates default to visible, safer than hiding
+            df = df_all[df_all["acknowledged_date"].apply(_in_range)]
+        else:
+            df = df_all
     conn.close()
     return df
+
+def purge_flags_for_ticker(ticker, reason="Ticker re-routed — new chapter started"):
+    """
+    Wipes ALL flag_log entries (active AND acknowledged) for a ticker the moment
+    it receives a new verdict/home. A new verdict = a new chapter; carrying old
+    flag history forward serves no purpose and clutters the audit trail.
+    Called automatically by unified_verdict_entry() and the auto-routing logic
+    in run_market_data_update() — manual calls should rarely be needed.
+    """
+    ticker = ticker.upper().strip()
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM flag_log WHERE ticker=%s", (ticker,))
+    conn.commit()
+    conn.close()
 
 def check_8k_triggers(ticker, acknowledged_keys):
     """
@@ -1007,11 +1044,13 @@ def run_market_data_update():
             conn.close()
             add_master_log(t, today, "HOLD", is_unified=1,
                            notes=f"Auto-downgraded from Buy List — Mid Upside compressed to {new_mid_up:.1f}% — {today}")
+            purge_flags_for_ticker(t, reason=f"Auto-downgraded Buy→Hold — {today}")
             auto_downgraded.append((t, row["current_price"], new_price, new_mid_up, mid_fe_new))
         else:
             remove_from_buy(t)
             add_master_log(t, today, "PASS", is_unified=1,
                            notes=f"Auto-retired from Buy List — Mid Upside fell to {new_mid_up:.1f}% (below 35%) — {today}")
+            purge_flags_for_ticker(t, reason=f"Auto-retired Buy→PASS — {today}")
             auto_retired_buy.append((t, row["current_price"], new_price, new_mid_up))
 
     for _, row in hold_df.iterrows():
@@ -1047,6 +1086,7 @@ def run_market_data_update():
             conn.close()
             add_master_log(t, today, "BUY", is_unified=1,
                            notes=f"Auto-upgraded from Hold List — Mid Upside reached {new_mid_up:.1f}% — {today}")
+            purge_flags_for_ticker(t, reason=f"Auto-upgraded Hold→Buy — {today}")
             auto_upgraded.append((t, row["current_price"], new_price, new_mid_up))
         elif new_mid_up >= 35.0:
             mid_fe_new = round(mid_ft / 1.5, 2)
@@ -1062,6 +1102,7 @@ def run_market_data_update():
             remove_from_hold(t)
             add_master_log(t, today, "PASS", is_unified=1,
                            notes=f"Auto-retired from Hold List — Mid Upside fell to {new_mid_up:.1f}% (below 35%) — {today}")
+            purge_flags_for_ticker(t, reason=f"Auto-retired Hold→PASS — {today}")
             auto_retired_hold.append((t, row["current_price"], new_price, new_mid_up))
 
     return {
@@ -1207,6 +1248,45 @@ elif page == "Master Log":
     with c3: st.markdown(log_counter_card("#ff6b6b", f"PASS: {len(all_log[all_log.verdict=='PASS'])}"), unsafe_allow_html=True)
     with c4: st.markdown(log_counter_card("#cc3333", f"HARD PASS: {len(all_log[all_log.verdict=='HARD_PASS'])}"), unsafe_allow_html=True)
     st.markdown(f'<p class="mono" style="color:#8899aa; font-size:0.8rem;">Showing {len(log_df)} records</p>', unsafe_allow_html=True)
+
+    # ── FULL REASONING CARD — only renders when searching a specific ticker ────
+    # Mirrors the Ticker Lookup page's card exactly, so search results here give
+    # the complete picture (verdict + date + reasoning) without needing to jump
+    # to a second page. List view below stays compact/scannable for browsing.
+    if search_term and len(log_df) >= 1:
+        searched_upper = search_term.upper().strip()
+        exact_matches = log_df[log_df["ticker"].str.upper() == searched_upper]
+        if not exact_matches.empty:
+            for _, row in exact_matches.iterrows():
+                verdict    = row["verdict"]
+                is_unified = int(row.get("is_unified", 1))
+                notes      = row.get("notes", "")
+                dt         = row["date_analyzed"]
+                row_id     = row["id"]
+                t_name     = row["ticker"]
+
+                border_full  = {"BUY": "#3ddc84", "HOLD": "#ffc947", "PASS": "#ff6b6b", "HARD_PASS": "#cc3333"}
+                border_muted = {"BUY": "#1a4a2a", "HOLD": "#3a2e00", "PASS": "#3a1010", "HARD_PASS": "#2a0a0a"}
+                labels  = {"BUY": "ALREADY ON BUY LIST", "HOLD": "ALREADY ON HOLD LIST", "PASS": "PREVIOUSLY PASSED", "HARD_PASS": "HARD PASS — PERMANENT"}
+                actions = {"BUY": "Already approved and active. Report position + skip.", "HOLD": "Already analyzed, waiting for price trigger. Report + skip.", "PASS": "Did not meet standards. Re-evaluation Triggers quarterly.", "HARD_PASS": "Permanent exclusion. BPO/AI-vulnerable or full cyclical fail."}
+                border_col   = border_full.get(verdict, "#2a3344") if is_unified else border_muted.get(verdict, "#2a3344")
+                ticker_col   = "#e8e4d9" if is_unified else "#4a5568"
+                date_col     = "#8899aa" if is_unified else "#3a4252"
+                border_style = f"border: 2px solid {border_col}; border-left: 7px solid {border_col};" if is_unified else f"border-left: 7px solid {border_col};"
+                badge_html   = verdict_badge_html(verdict, is_unified)
+                notes_html   = f'<p class="mono" style="color:#8899aa;">{notes}</p>' if notes else ""
+
+                st.markdown(
+                    f'<div class="metric-card" style="{border_style} padding: 1rem 1.4rem;">'
+                    f'<div style="display:flex; align-items:center; gap:0.8rem; margin-bottom:0.5rem;">'
+                    f'<span class="mono" style="color:#555e6e; font-size:0.72rem;">#{row_id}</span>'
+                    f'<h3 style="color:{ticker_col}; font-family:JetBrains Mono,monospace; margin:0;">{t_name} — {labels.get(verdict, verdict)}</h3>'
+                    f'</div><div style="margin-bottom:0.4rem;">{badge_html}</div>'
+                    f'<p class="mono" style="color:{date_col}; margin:0.3rem 0;">Date analyzed: {dt}</p>'
+                    f'<p class="mono" style="color:{border_col}; margin:0.3rem 0;">{actions.get(verdict, "")}</p>'
+                    f'{notes_html}</div>', unsafe_allow_html=True)
+            st.markdown("---")
+
     if log_df.empty:
         st.info("No records found.")
     else:
@@ -1592,9 +1672,15 @@ elif page == "Market Data Updates":
     # ── FLAG HISTORY (AUDIT TRAIL) ─────────────────────────────────────────────
     st.markdown("---")
     with st.expander("📋 Flag History — Acknowledged Flags (Audit Trail)"):
-        history_df = get_flag_history()
+        st.markdown(
+            '<p class="mono" style="color:#555e6e; font-size:0.72rem; margin-bottom:0.5rem;">'
+            'Shows last 90 days by default. History auto-clears per ticker the moment it '
+            'receives a new verdict — a new chapter starts, the old flag history is wiped.'
+            '</p>', unsafe_allow_html=True)
+        show_all_history = st.checkbox("Show full history (bypass 90-day filter)", value=False)
+        history_df = get_flag_history(days_back=90, show_all=show_all_history)
         if history_df.empty:
-            st.markdown('<p class="mono" style="color:#8899aa;">No acknowledged flags yet.</p>', unsafe_allow_html=True)
+            st.markdown('<p class="mono" style="color:#8899aa;">No acknowledged flags in this range.</p>', unsafe_allow_html=True)
         else:
             for _, hr in history_df.iterrows():
                 st.markdown(
@@ -1604,4 +1690,4 @@ elif page == "Market Data Updates":
                     f'<em>Acknowledged: {hr["acknowledged_date"]}</em>'
                     f'</p>', unsafe_allow_html=True)
 
-# Updated: June 29, 2026 — 7:20 PM — Dream Team 💙🦋
+# Updated: June 30, 2026 — 12:40 AM — Dream Team 💙🦋
