@@ -97,13 +97,7 @@ def verdict_badge_html(verdict, is_unified):
         style = muted.get(verdict, muted["PASS"])
         return f'<span style="padding:2px 8px; border-radius:3px; font-family:JetBrains Mono,monospace; font-size:0.78rem; font-weight:700; {style}">{label.get(verdict, verdict)}</span>'
 
-# ── DB CONNECTION (SUPABASE / POSTGRESQL) ─────────────────────────────────────
-# Connection string stored in Streamlit Secrets as:
-#   [supabase]
-#   db_url = "postgresql://postgres:[PASSWORD]@[HOST]:5432/postgres"
-#
-# Uses st.cache_resource to maintain a single persistent connection per session.
-# ping() validates the connection is alive before returning it; reconnects if stale.
+# ── DB CONNECTION ─────────────────────────────────────────────────────────────
 
 @st.cache_resource
 def _get_persistent_conn():
@@ -185,7 +179,6 @@ def init_db():
         outcome TEXT DEFAULT ''
     )""")
 
-    # Safe migrations — add columns if not already present
     safe_alters = [
         "ALTER TABLE buy_list ADD COLUMN IF NOT EXISTS mid_fair_target REAL DEFAULT 0",
         "ALTER TABLE hold_list ADD COLUMN IF NOT EXISTS mid_fair_target REAL DEFAULT 0",
@@ -207,12 +200,14 @@ def is_seeded():
     conn = get_conn()
     c = conn.cursor()
     try:
-        c.execute("SELECT COUNT(*) FROM master_log WHERE verdict='BUY'")
+        # Anchor check — GTLB BUY row ID=1 is permanent and never changes verdict
+        # This prevents re-seeding when BUY count drops due to legitimate re-evaluations
+        c.execute("SELECT COUNT(*) FROM master_log WHERE ticker='GTLB' AND verdict='BUY'")
         n = c.fetchone()[0]
     except Exception:
         n = 0
     conn.close()
-    return n >= 4
+    return n >= 1
 
 def seed_v55():
     conn = get_conn()
@@ -402,25 +397,21 @@ def fetch_current_fundamentals(ticker):
     try:
         t = yf.Ticker(ticker)
         info = t.fast_info
-
         price = None
         try:
             price = round(float(info.last_price), 2)
         except Exception:
             pass
-
         market_cap = None
         try:
             market_cap = float(info.market_cap)
         except Exception:
             pass
-
         shares_outstanding = None
         try:
             shares_outstanding = float(info.shares)
         except Exception:
             pass
-
         fcf_values = []
         try:
             cf = t.quarterly_cashflow
@@ -442,7 +433,6 @@ def fetch_current_fundamentals(ticker):
                         fcf_values = [float(v) for v in op_cf]
         except Exception:
             pass
-
         revenue_growth_rates = []
         try:
             income = t.financials
@@ -463,7 +453,6 @@ def fetch_current_fundamentals(ticker):
                             revenue_growth_rates.append(round(((current - prior) / prior) * 100, 2))
         except Exception:
             pass
-
         return {
             "price": price,
             "market_cap": market_cap,
@@ -474,33 +463,28 @@ def fetch_current_fundamentals(ticker):
     except Exception:
         return None
 
-# ── WRITE HELPERS ─────────────────────────────────────────────────────────────
+# ── UNIFIED VERDICT ENTRY ─────────────────────────────────────────────────────
 
 def unified_verdict_entry(ticker, new_verdict, date_str, notes,
                            price=None, mid_up=None, mid_ft=None,
                            mid_fe=None, inst=None):
-    """
-    Single atomic write operation for ALL verdict entries (BUY, HOLD, PASS, HARD_PASS).
-    Enforces One-Ticker-One-Home Rule in code — no manual table management required.
-    Resets baseline snapshot on every BUY or HOLD — structurally non-negotiable.
-    """
     ticker = ticker.upper().strip()
     conn = get_conn()
     c = conn.cursor()
 
-    # ── STEP 1: Detect current home ──────────────────────────────────────────
+    # Step 1: Detect current home
     c.execute("SELECT ticker FROM buy_list WHERE ticker=%s", (ticker,))
     in_buy = c.fetchone() is not None
     c.execute("SELECT ticker FROM hold_list WHERE ticker=%s", (ticker,))
     in_hold = c.fetchone() is not None
 
-    # ── STEP 2: Remove from current home (One-Ticker-One-Home enforced) ──────
+    # Step 2: Remove from current home
     if in_buy:
         c.execute("DELETE FROM buy_list WHERE ticker=%s", (ticker,))
     if in_hold:
         c.execute("DELETE FROM hold_list WHERE ticker=%s", (ticker,))
 
-    # ── STEP 3: Write to new home ─────────────────────────────────────────────
+    # Step 3: Write to new home
     if new_verdict == "BUY":
         score = round(mid_up / price, 2) if price and price > 0 else 0
         c.execute("UPDATE buy_list SET is_new=0")
@@ -537,18 +521,16 @@ def unified_verdict_entry(ticker, new_verdict, date_str, notes,
                 notes=EXCLUDED.notes""",
             (ticker, price, mid_up, mid_fe, mid_ft, score, date_str, notes))
 
-    # PASS / HARD_PASS — no active list write, master_log only
-
     conn.commit()
     conn.close()
 
-    # ── STEP 3.5: New verdict = new chapter — wipe old flag history ──────────
+    # Step 3.5: Purge old flags
     purge_flags_for_ticker(ticker, reason=f"Re-verdicted to {new_verdict} — {date_str}")
 
-    # ── STEP 4: Update Master Log (single row per ticker, updated in place) ──
+    # Step 4: Update Master Log
     add_master_log(ticker, date_str, new_verdict, notes, is_unified=1)
 
-    # ── STEP 5: Reset baseline — BUY or HOLD only, always, no exceptions ─────
+    # Step 5: Reset baseline — BUY or HOLD only
     if new_verdict in ("BUY", "HOLD") and YFINANCE_AVAILABLE:
         try:
             f = fetch_current_fundamentals(ticker)
@@ -557,8 +539,7 @@ def unified_verdict_entry(ticker, new_verdict, date_str, notes,
         except Exception:
             pass
 
-# ── LEGACY HELPERS — used by auto-routing (Market Data Updates) only ─────────
-# Do NOT call from the Add/Update UI — unified_verdict_entry() handles all manual entries.
+# ── LEGACY HELPERS (auto-routing only) ───────────────────────────────────────
 
 def add_or_update_buy(ticker, price, mid_up, mid_ft, inst, date_str, notes):
     ticker = ticker.upper().strip()
@@ -649,7 +630,7 @@ def update_price_in_db(table, ticker, new_price, new_score, new_mid_upside=None)
     conn.commit()
     conn.close()
 
-# ── 8-K TRIGGER ITEMS ────────────────────────────────────────────────────────
+# ── 8-K TRIGGERS ─────────────────────────────────────────────────────────────
 
 EIGHT_K_TRIGGERS = {
     "5.02": ("Flag #4: Major Leadership Change",          "🚩"),
@@ -665,7 +646,6 @@ EIGHT_K_TRIGGERS = {
 # ── FLAG LOG HELPERS ──────────────────────────────────────────────────────────
 
 def get_acknowledged_keys():
-    """Return a set of all acknowledged flag_key values."""
     conn = get_conn()
     c = conn.cursor()
     c.execute("SELECT flag_key FROM flag_log WHERE acknowledged=1")
@@ -674,7 +654,6 @@ def get_acknowledged_keys():
     return {r[0] for r in rows}
 
 def upsert_flag(ticker, flag_key, flag_type, flag_message, tier=1):
-    """Write a new flag to flag_log if it doesn't already exist."""
     today = date.today().strftime("%b %d, %Y")
     conn = get_conn()
     c = conn.cursor()
@@ -687,7 +666,6 @@ def upsert_flag(ticker, flag_key, flag_type, flag_message, tier=1):
     conn.close()
 
 def acknowledge_flag(flag_key, outcome="Reviewed — cleared"):
-    """Mark a flag as acknowledged."""
     today = date.today().strftime("%b %d, %Y")
     conn = get_conn()
     c = conn.cursor()
@@ -699,7 +677,6 @@ def acknowledge_flag(flag_key, outcome="Reviewed — cleared"):
     conn.close()
 
 def get_active_flags():
-    """Return all unacknowledged flags, ordered by ticker."""
     conn = get_conn()
     df = pd.read_sql(
         "SELECT * FROM flag_log WHERE acknowledged=0 ORDER BY ticker, flagged_date DESC",
@@ -708,17 +685,12 @@ def get_active_flags():
     return df
 
 def get_flag_history(days_back=90, show_all=False):
-    """Return acknowledged flags for audit trail.
-    By default, only shows flags acknowledged within the last N days.
-    Pass show_all=True to bypass the date filter entirely."""
     conn = get_conn()
     if show_all:
         df = pd.read_sql(
             "SELECT * FROM flag_log WHERE acknowledged=1 ORDER BY acknowledged_date DESC, ticker",
             conn)
     else:
-        cutoff = (date.today() - timedelta(days=days_back)).strftime("%b %d, %Y")
-        # acknowledged_date is stored as "%b %d, %Y" — parse-safe comparison via Python filter
         df_all = pd.read_sql(
             "SELECT * FROM flag_log WHERE acknowledged=1 ORDER BY acknowledged_date DESC, ticker",
             conn)
@@ -728,7 +700,7 @@ def get_flag_history(days_back=90, show_all=False):
                 try:
                     return datetime.strptime(d_str, "%b %d, %Y").date() >= cutoff_date
                 except Exception:
-                    return True  # malformed/blank dates default to visible, safer than hiding
+                    return True
             df = df_all[df_all["acknowledged_date"].apply(_in_range)]
         else:
             df = df_all
@@ -736,13 +708,6 @@ def get_flag_history(days_back=90, show_all=False):
     return df
 
 def purge_flags_for_ticker(ticker, reason="Ticker re-routed — new chapter started"):
-    """
-    Wipes ALL flag_log entries (active AND acknowledged) for a ticker the moment
-    it receives a new verdict/home. A new verdict = a new chapter; carrying old
-    flag history forward serves no purpose and clutters the audit trail.
-    Called automatically by unified_verdict_entry() and the auto-routing logic
-    in run_market_data_update() — manual calls should rarely be needed.
-    """
     ticker = ticker.upper().strip()
     conn = get_conn()
     c = conn.cursor()
@@ -751,12 +716,6 @@ def purge_flags_for_ticker(ticker, reason="Ticker re-routed — new chapter star
     conn.close()
 
 def check_8k_triggers(ticker, acknowledged_keys):
-    """
-    Check SEC EDGAR 8-K filings within 90-day lookback.
-    Skips filings whose flag_key is already acknowledged.
-    Each filing is uniquely keyed by ticker + item_num + filing_date — so a new
-    filing of the same type always fires fresh, regardless of prior acknowledgments.
-    """
     if not EDGAR_AVAILABLE:
         return []
     flags = []
@@ -777,7 +736,7 @@ def check_8k_triggers(ticker, acknowledged_keys):
                     if item_num in items_str:
                         flag_key = f"{ticker}-8K-{item_num}-{filing_date_fmt}"
                         if flag_key in acknowledged_keys:
-                            continue  # Already reviewed — skip
+                            continue
                         msg = (f"{emoji} {ticker} — {label} "
                                f"(8-K Item {item_num}) — Filed {filing_date.strftime('%b %d, %Y')} "
                                f"— review 8-K filing")
@@ -797,20 +756,6 @@ def check_8k_triggers(ticker, acknowledged_keys):
 # ── HARD TRIGGER GATE ─────────────────────────────────────────────────────────
 
 def run_hard_trigger_gate(all_tickers_df):
-    """
-    Screens all tickers for hard trigger conditions.
-    
-    Quantitative flags (Price, FCF, Share Count):
-      - Tier 1 thresholds: ±20% price, 1 negative FCF Q, ±5% share count
-      - Tier 2 thresholds: ±30% price, 2 consecutive negative FCF Qs (auto-fail), ±10% share count
-      - Once a Tier 1 flag is acknowledged, it re-fires ONLY if the condition
-        worsens to Tier 2 threshold.
-    
-    8-K flags:
-      - Keyed by ticker + item number + filing date.
-      - Each new filing always fires fresh regardless of prior acknowledgments.
-      - Acknowledged filings are permanently suppressed until they age out of 90-day window.
-    """
     blocked = {}
     clear = []
     today_str = date.today().strftime("%Y-%m-%d")
@@ -822,7 +767,7 @@ def run_hard_trigger_gate(all_tickers_df):
     for _, row in all_tickers_df.iterrows():
         t = row["ticker"]
         current_price = row["current_price"]
-        ticker_flags = []  # list of (flag_key, message) tuples
+        ticker_flags = []
 
         c.execute("""SELECT price, market_cap, shares_outstanding, baseline_date
                      FROM price_history WHERE ticker=%s""", (t,))
@@ -831,13 +776,12 @@ def run_hard_trigger_gate(all_tickers_df):
         baseline_shares   = bl[2] if bl else None
         baseline_date_str = bl[3] if bl else "unknown"
 
-        # ── FLAG #1: Price movement — tiered ─────────────────────────────────
+        # Flag #1: Price movement — tiered
         if baseline_price and baseline_price > 0:
             pct_move = abs(current_price - baseline_price) / baseline_price * 100
             direction = "+" if current_price > baseline_price else "-"
             base_msg  = (f"(${baseline_price:.2f} on {baseline_date_str} "
                          f"→ ${current_price:.2f})")
-
             if pct_move >= 30:
                 fk = f"{t}-FLAG1-T2-{today_str}"
                 if fk not in acknowledged_keys:
@@ -847,7 +791,6 @@ def run_hard_trigger_gate(all_tickers_df):
                     ticker_flags.append((fk, msg))
             elif pct_move >= 20:
                 fk = f"{t}-FLAG1-T1-{today_str}"
-                # Only fire Tier 1 if neither tier is already acknowledged
                 t1_ack = any(k for k in acknowledged_keys if k.startswith(f"{t}-FLAG1-"))
                 if not t1_ack:
                     msg = (f"🚩 {t} — Flag #1: Price moved {direction}{pct_move:.1f}% "
@@ -855,7 +798,6 @@ def run_hard_trigger_gate(all_tickers_df):
                     upsert_flag(t, fk, "FLAG1-PRICE", msg, tier=1)
                     ticker_flags.append((fk, msg))
 
-        # ── Fundamentals fetch ────────────────────────────────────────────────
         fundamentals = None
         if YFINANCE_AVAILABLE:
             fundamentals = fetch_current_fundamentals(t)
@@ -871,7 +813,7 @@ def run_hard_trigger_gate(all_tickers_df):
             fcf_values     = fundamentals.get("fcf_values", [])
             rev_growth     = fundamentals.get("revenue_growth_rates", [])
 
-            # ── FLAG #2: Revenue deceleration (not tiered — condition-based) ─
+            # Flag #2: Revenue deceleration
             if len(rev_growth) >= 2:
                 latest   = rev_growth[-1]
                 previous = rev_growth[-2]
@@ -880,7 +822,6 @@ def run_hard_trigger_gate(all_tickers_df):
                 consec   = len(rev_growth) >= 3 and (rev_growth[-2] - rev_growth[-3]) > 0
                 cn       = " (2+ consecutive periods)" if consec else ""
                 fk_base  = f"{t}-FLAG2"
-
                 if decel >= 5.0 and below8:
                     fk = f"{fk_base}-AUTOFAIL-{today_str}"
                     if not any(k for k in acknowledged_keys if k.startswith(fk_base)):
@@ -913,7 +854,7 @@ def run_hard_trigger_gate(all_tickers_df):
                         upsert_flag(t, fk, "FLAG2-REV", msg, tier=1)
                         ticker_flags.append((fk, msg))
 
-            # ── FLAG #3: FCF — tiered ─────────────────────────────────────────
+            # Flag #3: FCF — tiered
             if fcf_values:
                 mrq = fcf_values[0]
                 if mrq < 0:
@@ -934,13 +875,12 @@ def run_hard_trigger_gate(all_tickers_df):
                             upsert_flag(t, fk, "FLAG3-FCF", msg, tier=1)
                             ticker_flags.append((fk, msg))
 
-            # ── FLAG #5: Share count — tiered ─────────────────────────────────
+            # Flag #5: Share count — tiered
             if baseline_shares and baseline_shares > 0 and current_shares and current_shares > 0:
                 expected_mktcap = current_price * baseline_shares
                 actual_mktcap   = current_price * current_shares
                 share_pct = (actual_mktcap - expected_mktcap) / expected_mktcap * 100
-
-                if share_pct > 0:  # dilution
+                if share_pct > 0:
                     if share_pct >= 10.0:
                         fk = f"{t}-FLAG5-T2-{today_str}"
                         if fk not in acknowledged_keys:
@@ -960,19 +900,17 @@ def run_hard_trigger_gate(all_tickers_df):
                                    f"review required")
                             upsert_flag(t, fk, "FLAG5-SHARES", msg, tier=1)
                             ticker_flags.append((fk, msg))
-                elif share_pct <= -5.0:  # buyback — informational only, never blocks
+                elif share_pct <= -5.0:
                     fk = f"{t}-FLAG5-BUYBACK-{today_str}"
                     if fk not in acknowledged_keys:
                         msg = (f"✅ {t} — Flag #5: Share count decreased {abs(share_pct):.1f}% "
                                f"since baseline (baseline: {baseline_shares/1e6:.1f}M → "
                                f"current: {current_shares/1e6:.1f}M) — significant buyback — noted")
                         upsert_flag(t, fk, "FLAG5-BUYBACK", msg, tier=1)
-                        # Buybacks are informational — do NOT add to ticker_flags (won't block)
 
-        # ── 8-K flags ─────────────────────────────────────────────────────────
+        # 8-K flags
         ticker_flags.extend(check_8k_triggers(t, acknowledged_keys))
 
-        # ── Route: blocked or clear ───────────────────────────────────────────
         if ticker_flags:
             blocked[t] = ticker_flags
         else:
@@ -981,7 +919,7 @@ def run_hard_trigger_gate(all_tickers_df):
     conn.close()
     return blocked, clear
 
-# ── MAIN MARKET DATA UPDATE ───────────────────────────────────────────────────
+# ── MARKET DATA UPDATE ────────────────────────────────────────────────────────
 
 def run_market_data_update():
     buy_df  = get_buy_list()
@@ -991,7 +929,6 @@ def run_market_data_update():
 
     today  = date.today().strftime("%b %d, %Y")
     all_df = pd.concat([buy_df, hold_df], ignore_index=True)
-
     blocked, clear_tickers = run_hard_trigger_gate(all_df)
 
     prices = {}
@@ -1249,10 +1186,6 @@ elif page == "Master Log":
     with c4: st.markdown(log_counter_card("#cc3333", f"HARD PASS: {len(all_log[all_log.verdict=='HARD_PASS'])}"), unsafe_allow_html=True)
     st.markdown(f'<p class="mono" style="color:#8899aa; font-size:0.8rem;">Showing {len(log_df)} records</p>', unsafe_allow_html=True)
 
-    # ── FULL REASONING CARD — only renders when searching a specific ticker ────
-    # Mirrors the Ticker Lookup page's card exactly, so search results here give
-    # the complete picture (verdict + date + reasoning) without needing to jump
-    # to a second page. List view below stays compact/scannable for browsing.
     if search_term and len(log_df) >= 1:
         searched_upper = search_term.upper().strip()
         exact_matches = log_df[log_df["ticker"].str.upper() == searched_upper]
@@ -1264,7 +1197,6 @@ elif page == "Master Log":
                 dt         = row["date_analyzed"]
                 row_id     = row["id"]
                 t_name     = row["ticker"]
-
                 border_full  = {"BUY": "#3ddc84", "HOLD": "#ffc947", "PASS": "#ff6b6b", "HARD_PASS": "#cc3333"}
                 border_muted = {"BUY": "#1a4a2a", "HOLD": "#3a2e00", "PASS": "#3a1010", "HARD_PASS": "#2a0a0a"}
                 labels  = {"BUY": "ALREADY ON BUY LIST", "HOLD": "ALREADY ON HOLD LIST", "PASS": "PREVIOUSLY PASSED", "HARD_PASS": "HARD PASS — PERMANENT"}
@@ -1272,10 +1204,9 @@ elif page == "Master Log":
                 border_col   = border_full.get(verdict, "#2a3344") if is_unified else border_muted.get(verdict, "#2a3344")
                 ticker_col   = "#e8e4d9" if is_unified else "#4a5568"
                 date_col     = "#8899aa" if is_unified else "#3a4252"
-                border_style = f"border: 2px solid {border_col}; border-left: 7px solid {border_col};" if is_unified else f"border-left: 7px solid {border_col};"
+                border_style = ("border: 2px solid " + border_col + "; border-left: 7px solid " + border_col + ";") if is_unified else ("border-left: 7px solid " + border_col + ";")
                 badge_html   = verdict_badge_html(verdict, is_unified)
                 notes_html   = f'<p class="mono" style="color:#8899aa;">{notes}</p>' if notes else ""
-
                 st.markdown(
                     f'<div class="metric-card" style="{border_style} padding: 1rem 1.4rem;">'
                     f'<div style="display:flex; align-items:center; gap:0.8rem; margin-bottom:0.5rem;">'
@@ -1318,7 +1249,7 @@ elif page == "Ticker Lookup":
             border_col   = border_full.get(verdict, "#2a3344") if is_unified else border_muted.get(verdict, "#2a3344")
             ticker_col   = "#e8e4d9" if is_unified else "#4a5568"
             date_col     = "#8899aa" if is_unified else "#3a4252"
-            border_style = f"border: 2px solid {border_col}; border-left: 7px solid {border_col};" if is_unified else f"border-left: 7px solid {border_col};"
+            border_style = ("border: 2px solid " + border_col + "; border-left: 7px solid " + border_col + ";") if is_unified else ("border-left: 7px solid " + border_col + ";")
             badge_html   = verdict_badge_html(verdict, is_unified)
             notes_html   = f'<p class="mono" style="color:#8899aa;">{notes}</p>' if notes else ""
             st.markdown(
@@ -1339,7 +1270,7 @@ elif page == "Ticker Lookup":
                 unsafe_allow_html=True)
 
 elif page == "Add / Update":
-    st.markdown('<div class="header-block" style="border-left:7px solid #2a7fff;"><h1 style="color:#2a7fff;">Add / Update Ticker</h1><p class="mono" style="color:#8899aa;">HANDOFF line — auto-logs to correct table with Capital Efficiency Score. Unified entry point — all verdicts, new or re-evaluation. One-Ticker-One-Home enforced in code. Baseline snapshot resets on every BUY/HOLD.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-block" style="border-left:7px solid #2a7fff;"><h1 style="color:#2a7fff;">Add / Update Ticker</h1><p class="mono" style="color:#8899aa;">Single entry point for all verdicts — new or re-evaluation. One-Ticker-One-Home enforced automatically. Baseline snapshot resets on every BUY or HOLD — no exceptions.</p></div>', unsafe_allow_html=True)
     tab_log, tab_remove = st.tabs(["Log Verdict", "Remove Ticker"])
 
     with tab_log:
@@ -1358,7 +1289,6 @@ elif page == "Add / Update":
                 lv_verdict = st.selectbox("Verdict *", ["BUY", "HOLD", "PASS", "HARD_PASS"])
             lv_notes = st.text_area("Notes / reason for verdict")
             lv_date  = st.text_input("Date", value=date.today().strftime("%b %d, %Y"))
-
             st.markdown("---")
             st.markdown(
                 '<p class="mono" style="color:#555e6e; font-size:0.8rem;">'
@@ -1366,7 +1296,6 @@ elif page == "Add / Update":
                 'HOLD → Price, Mid Upside, Mid Fair Entry, Mid Fair Target required. &nbsp;|&nbsp; '
                 'PASS / HARD PASS → leave price fields at defaults.'
                 '</p>', unsafe_allow_html=True)
-
             col1, col2 = st.columns(2)
             with col1:
                 lv_price  = st.number_input("Current Price ($)", min_value=0.01, value=100.00, step=0.01)
@@ -1377,7 +1306,6 @@ elif page == "Add / Update":
                 lv_inst   = st.selectbox("Institutional Money / Tape Reading — BUY only",
                     ["Pending", "Strong absorption / aggressive buying",
                      "Neutral / choppy flow", "Distribution / selling pressure"])
-
             if st.form_submit_button("Submit Verdict"):
                 if not lv_ticker:
                     st.error("Ticker is required.")
@@ -1426,7 +1354,7 @@ elif page == "Add / Update":
                     st.success(f"{r_ticker_hold} removed from Hold List.")
         st.markdown("---")
         st.markdown("#### Delete Entry from Master Log")
-        st.markdown('<p class="mono" style="color:#cc3333; font-size:0.85rem;">⚠️ Admin only — use to remove duplicate or erroneous rows. Check Master Log page for the correct row ID first.</p>', unsafe_allow_html=True)
+        st.markdown('<p class="mono" style="color:#cc3333; font-size:0.85rem;">Admin only — use to remove duplicate or erroneous rows. Check Master Log page for the correct row ID first.</p>', unsafe_allow_html=True)
         col_d1, col_d2 = st.columns(2)
         with col_d1:
             d_id = st.number_input("Master Log Row ID", min_value=1, step=1, value=1)
@@ -1454,7 +1382,7 @@ elif page == "Market Data Updates":
         '<h1 style="color:#2a7fff;">Market Data Updates</h1>'
         '<p class="mono" style="color:#8899aa; font-size:0.72rem;">'
         'Step 1: Hard Trigger Gate screens ALL tickers before any DB writes. '
-        'Steps 2+: Price refresh + CE Score recalc + 3-tier routing — ✅ All Clear tickers only. '
+        'Steps 2+: Price refresh + CE Score recalc + 3-tier routing — All Clear tickers only. '
         'Flags persist until acknowledged — no re-firing on already-reviewed events.'
         '</p></div>', unsafe_allow_html=True)
 
@@ -1513,7 +1441,6 @@ elif page == "Market Data Updates":
 
     st.markdown("---")
 
-    # ── ACTIVE FLAGS PANEL ─────────────────────────────────────────────────────
     active_flags_df = get_active_flags()
     if not active_flags_df.empty:
         st.markdown(
@@ -1521,11 +1448,8 @@ elif page == "Market Data Updates":
             '<p class="mono" style="color:#ff6b6b; font-weight:700; margin:0;">🚫 ACTIVE FLAGS — PENDING REVIEW & ACKNOWLEDGMENT</p>'
             '<p class="mono" style="color:#8899aa; font-size:0.78rem; margin:0.3rem 0;">'
             'Flagged tickers are frozen — zero DB writes until acknowledged. '
-            'Acknowledge each flag after review to clear it. '
-            '8-K flags: tied to specific filing date — a new filing always fires fresh. '
-            'Quant flags: re-fire only if condition worsens to Tier 2 threshold.'
+            'Acknowledge each flag after review to clear it.'
             '</p></div>', unsafe_allow_html=True)
-
         grouped = active_flags_df.groupby("ticker")
         for ticker_name, group in grouped:
             tier2 = any(group["tier"] == 2)
@@ -1550,16 +1474,13 @@ elif page == "Market Data Updates":
                         st.rerun()
         st.markdown("---")
 
-    # ── RUN UPDATE BUTTON ──────────────────────────────────────────────────────
     if st.button("RUN MARKET DATA UPDATE", type="primary"):
         with st.spinner("Step 1: Hard Trigger Gate — screening all tickers before any updates..."):
             result, error = run_market_data_update()
-
         if error:
             st.error(f"Error: {error}")
         elif result:
             st.success(f"Market Data Update complete — {result['timestamp']}")
-
             if result["blocked"]:
                 st.markdown("---")
                 st.markdown(
@@ -1614,7 +1535,7 @@ elif page == "Market Data Updates":
                 if result["auto_upgraded"]:
                     st.markdown('<p class="mono" style="color:#3ddc84; font-weight:700;">✅ AUTO-UPGRADED → Buy List</p>', unsafe_allow_html=True)
                     for t, old, new, upside in result["auto_upgraded"]:
-                        st.markdown(f'<p class="mono" style="color:#3ddc84;">▲ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside reached {upside:.1f}% — moved to Buy List. Institutional: Pending.</p>', unsafe_allow_html=True)
+                        st.markdown(f'<p class="mono" style="color:#3ddc84;">▲ <strong>{t}</strong>: ${old:.2f} → ${new:.2f} &nbsp;|&nbsp; Mid Upside reached {upside:.1f}% — moved to Buy List.</p>', unsafe_allow_html=True)
                 if result["auto_downgraded"]:
                     st.markdown('<p class="mono" style="color:#ffc947; font-weight:700;">⚠️ AUTO-DOWNGRADED → Hold List</p>', unsafe_allow_html=True)
                     for t, old, new, upside, mid_fe in result["auto_downgraded"]:
@@ -1669,13 +1590,11 @@ elif page == "Market Data Updates":
                     else:
                         st.error(f"{mp_ticker} not found in Hold List.")
 
-    # ── FLAG HISTORY (AUDIT TRAIL) ─────────────────────────────────────────────
     st.markdown("---")
     with st.expander("📋 Flag History — Acknowledged Flags (Audit Trail)"):
         st.markdown(
             '<p class="mono" style="color:#555e6e; font-size:0.72rem; margin-bottom:0.5rem;">'
-            'Shows last 90 days by default. History auto-clears per ticker the moment it '
-            'receives a new verdict — a new chapter starts, the old flag history is wiped.'
+            'Shows last 90 days by default. History auto-clears per ticker on new verdict.'
             '</p>', unsafe_allow_html=True)
         show_all_history = st.checkbox("Show full history (bypass 90-day filter)", value=False)
         history_df = get_flag_history(days_back=90, show_all=show_all_history)
@@ -1690,4 +1609,4 @@ elif page == "Market Data Updates":
                     f'<em>Acknowledged: {hr["acknowledged_date"]}</em>'
                     f'</p>', unsafe_allow_html=True)
 
-# Updated: June 30, 2026 — 12:40 AM — Dream Team 💙🦋
+# Updated: July 1, 2026 — 11:35 AM — Dream Team 💙🦋
