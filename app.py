@@ -200,9 +200,10 @@ def is_seeded():
     conn = get_conn()
     c = conn.cursor()
     try:
-        # Anchor check — GTLB BUY row ID=1 is permanent and never changes verdict
-        # This prevents re-seeding when BUY count drops due to legitimate re-evaluations
-        c.execute("SELECT COUNT(*) FROM master_log WHERE ticker='GTLB' AND verdict='BUY'")
+        # Dedicated seed marker row — never tied to any real ticker or verdict
+        # Cannot be changed by any normal app operation, re-evaluation, or auto-routing
+        # Self-documenting: __SEED__ is not a real ticker, SEEDED is not a real verdict
+        c.execute("SELECT COUNT(*) FROM master_log WHERE ticker='__SEED__' AND verdict='SEEDED'")
         n = c.fetchone()[0]
     except Exception:
         n = 0
@@ -212,6 +213,11 @@ def is_seeded():
 def seed_v55():
     conn = get_conn()
     c = conn.cursor()
+
+    # Insert permanent seed marker first — this is the anchor for is_seeded()
+    c.execute("""INSERT INTO master_log (ticker, date_analyzed, verdict, notes, is_unified)
+        VALUES ('__SEED__', 'May 4, 2026', 'SEEDED', 'System seed marker — do not delete or modify', 0)
+        ON CONFLICT DO NOTHING""")
 
     buy_data = [
         ("GTLB", 25.98, 50.0, 39.0,  "Pending", "May 11, 2026", 0),
@@ -1609,4 +1615,4 @@ elif page == "Market Data Updates":
                     f'<em>Acknowledged: {hr["acknowledged_date"]}</em>'
                     f'</p>', unsafe_allow_html=True)
 
-# Updated: July 1, 2026 — 11:35 AM — Dream Team 💙🦋
+# Updated: July 1, 2026 — 8:30 PM — Dream Team 💙🦋
